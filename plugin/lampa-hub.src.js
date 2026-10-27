@@ -181,7 +181,7 @@
             var e = byk[k];
             if (!e) { e = byk[k] = JSON.parse(JSON.stringify(p)); e.id = k; e.sources = e.sources || []; order.push(k); return; }
             if (e.url !== p.url && p.url && (e.mirrors || []).indexOf(p.url) < 0) e.mirrors = (e.mirrors || []).concat([p.url]);
-            ['author', 'version', 'page', 'status', 'updated', 'repo', 'stars', 'pushed', 'created', 'topics', 'license', 'homepage', 'popular', 'probe'].forEach(function (f) {
+            ['author', 'version', 'page', 'img', 'status', 'updated', 'repo', 'stars', 'pushed', 'created', 'topics', 'license', 'homepage', 'popular', 'probe'].forEach(function (f) {
                 if (e[f] == null && p[f] != null) e[f] = p[f];
             });
             if (p.descr && (!e.descr || p.descr.length > e.descr.length)) e.descr = p.descr;
@@ -385,6 +385,8 @@
 
     /* ------------------------------------------------------------------ UI: page in the look of Lampa's official "Расширения" */
     var CSS = '' +
+        '.hub-card .hub-shot{position:absolute;left:0;top:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity .3s}' +
+        '.hub-card .hub-shot.loaded{opacity:1}' +
         '.hub-card .extensions__item-author{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
         '.hub-card .extensions__item-name{overflow:hidden;text-overflow:ellipsis}' +
         '.hub-card .extensions__item-descr{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:3em;margin-top:.5em;opacity:.8}' +
@@ -435,6 +437,13 @@
             img.src = 'https://github.com/' + encodeURIComponent(o.avatar) + '.png?size=120';
             box.appendChild(img);
         }
+        if (o.img) {
+            var shot = el('img', 'hub-shot');
+            shot.onload = function () { shot.className += ' loaded'; };
+            shot.onerror = function () { shot.parentNode && shot.parentNode.removeChild(shot); };
+            shot.src = o.img;
+            box.appendChild(shot);
+        }
         if (o.check) box.appendChild(el('div', 'extensions__item-included'));
         var body = el('div', 'extensions__item-body');
         body.appendChild(el('div', 'extensions__item-author', o.author || ''));
@@ -456,7 +465,7 @@
         else if (ctx.nw[p.id]) badge = ['Новое', 'shareware'];
         else if (p.found) badge = ['GitHub', 'paid'];
         var c = baseCard({ name: p.name, seed: p.id, author: authorOf(p), descr: p.descr, stars: p.stars, version: p.version, date: p.updated,
-            avatar: ownerOf(p), check: i && i.status, badge: badge });
+            avatar: ownerOf(p), img: p.img, check: i && i.status, badge: badge });
         c.addEventListener('hover:enter', function () { showDetail(p, ctx.after); });
         return c;
     }

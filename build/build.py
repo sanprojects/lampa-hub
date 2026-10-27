@@ -213,6 +213,66 @@ def merge(raw):
     return out
 
 
+# ---------------------------------------------------------------- screenshots
+SCREENS_URL = 'https://tv-ch.ru/lampa-interface/'
+
+
+def pick_img(tag):
+    """Largest srcset candidate up to 800px wide, else src."""
+    src = re.search(r'\ssrc="([^"]+)"', tag)
+    best = src.group(1) if src else None
+    ss = re.search(r'srcset="([^"]+)"', tag)
+    if ss:
+        cands = []
+        for part in ss.group(1).split(','):
+            bits = part.split()
+            if len(bits) == 2 and bits[1].endswith('w') and bits[1][:-1].isdigit() and int(bits[1][:-1]) <= 800:
+                cands.append((int(bits[1][:-1]), bits[0]))
+        if cands:
+            best = max(cands)[1]
+    return best if best and best.startswith('https://') and best.isascii() else None
+
+
+def fetch_screens():
+    """plugin key -> screenshot URL, parsed from the tv-ch.ru article (heading, image(s), plugin .js links)."""
+    try:
+        text = get(SCREENS_URL, timeout=30)[2].decode('utf-8', 'replace')
+    except Exception as e:
+        print('screens: unavailable', e)
+        return {}
+    start = text.find('wp-block-heading')
+    ends = [i for i in (text.find('id="comments"', start), text.find('Комментарии</span>', start), text.find('<footer', start)) if i > 0]
+    end = min(ends) if ends else -1
+    body = text[start:end if end > 0 else None]
+    out, img, urls = {}, None, []
+
+    def flush():
+        if img:
+            for u in urls:
+                out.setdefault(key(u), img)
+
+    for m in re.finditer(r'<h[23][^>]*>|<img\b[^>]*>|href="(https?://[^"]+\.js)(?:\?[^"]*)?"', body):
+        t = m.group(0)
+        if t.startswith('<h'):
+            flush()
+            img, urls = None, []
+        elif t.startswith('<img'):
+            img = img or pick_img(t)
+        elif 'tv-ch.ru' not in m.group(1):
+            urls.append(m.group(1))
+    flush()
+    return out
+
+
+def apply_screens(plugins, screens):
+    n = 0
+    for p in plugins:
+        if not p.get('img') and p['id'] in screens:
+            p['img'] = screens[p['id']]
+            n += 1
+    return n
+
+
 # ---------------------------------------------------------------- probing
 RE_VER = [re.compile(p, re.I) for p in (
     r"@version\s+v?([\w.\-+]+)", r"\bversion['\"]?\s*[:=]\s*['\"]v?(\d[\w.\-+]*)['\"]",
@@ -348,6 +408,7 @@ def main():
         found = github_discover({p['id'] for p in plugins})
         print('github candidates', len(found))
         plugins = merge(raw + found)
+    print('screenshots for', apply_screens(plugins, fetch_screens()), 'plugins')
     if not a.no_probe:
         probe_all(plugins)
         print('alive', sum(1 for p in plugins if p.get('probe', {}).get('http') == 200), 'of', len(plugins))

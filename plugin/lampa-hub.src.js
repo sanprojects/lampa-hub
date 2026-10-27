@@ -383,46 +383,296 @@
         });
     }
 
-    /* ------------------------------------------------------------------ UI */
-    function controllerName() { try { return Lampa.Controller.enabled().name; } catch (e) { return 'content'; } }
+    /* ------------------------------------------------------------------ UI: page in the look of Lampa's official "Расширения" */
+    var CSS = '' +
+        '.hub-card .extensions__item-author{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
+        '.hub-card .extensions__item-name{overflow:hidden;text-overflow:ellipsis}' +
+        '.hub-card .extensions__item-descr{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:3em;margin-top:.5em;opacity:.8}' +
+        '.hub-card .extensions__item-footer{flex-wrap:wrap;margin-top:auto;padding-top:.6em}' +
+        '.hub-card .extensions__item-stars{color:#ffd666;font-weight:600;font-size:.9em;margin-right:.8em;white-space:nowrap}' +
+        '.hub-card .extensions__item-status{margin-right:.8em;white-space:nowrap}' +
+        '.hub-card .extensions__item-code{margin-right:.6em;white-space:nowrap}' +
+        '.hub-card .extensions__item-price{margin-left:auto}' +
+        '.hub-card .extensions__item-price--bad{background-color:rgba(221,115,55,.22);color:#ff9d6e}' +
+        '.hub-act{flex-direction:column;text-align:center}' +
+        '.hub-act__title{font-size:1.2em;margin-bottom:.4em}' +
+        '.hub-act__sub{font-size:.84em;color:#8D8D8D;line-height:1.4}' +
+        '.hub-page .extensions__block-title span{color:#8D8D8D;font-size:.8em;margin-left:.6em}';
 
-    function line(p, inst) {
-        var parts = [];
-        if (p.version) parts.push('v' + p.version);
-        if (p.updated) parts.push(p.updated);
-        parts.push(p.group || 'Разное');
-        if (p.stars) parts.push('★' + p.stars);
-        var sub = parts.join(' · ');
-        if (p.descr) sub += '\n' + clip(p.descr, 110);
-        return sub;
+    function injectCss() {
+        if (document.getElementById('lampa-hub-css')) return;
+        var st = document.createElement('style'); st.id = 'lampa-hub-css'; st.textContent = CSS; document.head.appendChild(st);
     }
-    function mark(p, inst, newIds) {
-        var i = inst[p.id];
-        var m = i ? (i.status ? '● ' : '○ ') : '';
-        return m + p.name + (newIds && newIds[p.id] ? '  NEW' : '');
-    }
+
     function newIdsMap() {
         var m = {}, lim = Date.now() - 14 * 864e5;
         history().forEach(function (h) { if (h.type === 'new' && h.ts > lim) m[h.id] = 1; });
         return m;
     }
+    function ownerOf(p) {
+        if (p.repo) return p.repo.split('/')[0];
+        var u = p.url || '', m = u.match(/^https?:\/\/([^\/.]+)\.github\.io\//i);
+        if (m) return m[1];
+        m = u.match(/(?:raw\.githubusercontent\.com|cdn\.jsdelivr\.net\/gh|github\.com)\/([^\/@]+)\//i);
+        return m ? m[1] : null;
+    }
+    function hueOf(s) { var h = 0; s = s || ''; for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return Math.abs(h) % 360; }
+    function authorOf(p) { var a = p.author; if (a) return a.charAt(0) === '@' ? a : '@' + a; return p.sources && p.sources[0] ? p.sources[0] : ''; }
+    function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
 
-    function showList(title, list, back, state) {
-        state = state || {};
-        var inst = installedMap(), nw = newIdsMap();
-        var items = list.map(function (p, i) {
-            return { title: mark(p, inst, nw), subtitle: line(p, inst), plugin: p, selected: i === (state.idx || 0) };
+    /* card skeleton shared by plugin / history cards */
+    function baseCard(o) {
+        var c = el('div', 'extensions__item extensions__item--store hub-card selector layer--visible layer--render');
+        var box = el('div', 'extensions__item-imagebox'), h = hueOf(o.seed || o.name);
+        var stops = 'hsla(' + h + ',60%,48%,.6) 0%, hsla(' + h + ',60%,48%,.25) 45%, hsla(' + h + ',60%,48%,.06) 100%';
+        box.style.backgroundImage = 'radial-gradient(ellipse farthest-corner at center, ' + stops + ')';
+        var letter = el('div', 'extensions__item-letter', (o.name || '?').trim().slice(0, 1).toUpperCase());
+        box.appendChild(letter);
+        if (o.avatar) {
+            var img = el('img', 'extensions__item-icon');
+            img.onload = function () { img.className += ' loaded'; letter.style.display = 'none'; };
+            img.onerror = function () { img.style.display = 'none'; };
+            img.src = 'https://github.com/' + encodeURIComponent(o.avatar) + '.png?size=120';
+            box.appendChild(img);
+        }
+        if (o.check) box.appendChild(el('div', 'extensions__item-included'));
+        var body = el('div', 'extensions__item-body');
+        body.appendChild(el('div', 'extensions__item-author', o.author || ''));
+        body.appendChild(el('div', 'extensions__item-name', o.name));
+        if (o.descr) body.appendChild(el('div', 'extensions__item-descr', clip(o.descr, 150)));
+        var foot = el('div', 'extensions__item-footer');
+        if (o.stars) foot.appendChild(el('div', 'extensions__item-stars', '★ ' + o.stars));
+        if (o.version) foot.appendChild(el('div', 'extensions__item-code', 'v' + o.version));
+        if (o.date) foot.appendChild(el('div', 'extensions__item-status', o.date));
+        if (o.badge) foot.appendChild(el('div', 'extensions__item-price extensions__item-price--' + o.badge[1], o.badge[0]));
+        body.appendChild(foot);
+        c.appendChild(box); c.appendChild(body);
+        return c;
+    }
+
+    function pluginCard(p, ctx) {
+        var i = ctx.inst[p.id], badge = null;
+        if (i) badge = i.status ? ['Установлен', 'free'] : ['Выключен', 'bad'];
+        else if (ctx.nw[p.id]) badge = ['Новое', 'shareware'];
+        else if (p.found) badge = ['GitHub', 'paid'];
+        var c = baseCard({ name: p.name, seed: p.id, author: authorOf(p), descr: p.descr, stars: p.stars, version: p.version, date: p.updated,
+            avatar: ownerOf(p), check: i && i.status, badge: badge });
+        c.addEventListener('hover:enter', function () { showDetail(p, ctx.after); });
+        return c;
+    }
+
+    var HIST_BADGE = { installed: 'free', removed: 'paid', updated: 'shareware', 'new': 'shareware', enabled: 'free', disabled: 'bad' };
+    function historyCard(e, ctx) {
+        var txt = (TYPE_TXT[e.type] || e.type) + (e.extra && e.extra.from ? ': ' + e.extra.from + ' → ' + e.extra.to : '');
+        var c = baseCard({ name: e.name, seed: e.id, author: e.date, descr: txt + (e.descr ? ' · ' + e.descr : ''), version: e.version, date: e.updated,
+            avatar: ownerOf({ url: e.url }), badge: [TYPE_TXT[e.type] || e.type, HIST_BADGE[e.type] || 'shareware'] });
+        c.addEventListener('hover:enter', function () {
+            var p = ctx.all.filter(function (x) { return x.id === e.id; })[0] || { id: e.id, name: e.name, url: e.url, version: e.version, descr: e.descr,
+                author: e.author, group: e.group, sources: e.sources || [], updated: e.updated };
+            showDetail(p, ctx.after);
         });
-        if (!items.length) { noty('Ничего не найдено'); return back && back(); }
-        Lampa.Select.show({
-            title: title + ' (' + list.length + ')', items: items,
-            onBack: function () { back && back(); },
-            onSelect: function (a) {
-                state.idx = items.indexOf(a);
-                setTimeout(function () { showDetail(a.plugin, function () { showList(title, list, back, state); }); }, 10);
+        return c;
+    }
+
+    function actionCard(a) {
+        var c = el('div', 'extensions__block-add hub-act selector layer--visible layer--render');
+        c.appendChild(el('div', 'hub-act__title', a.title));
+        c.appendChild(el('div', 'hub-act__sub', a.sub || ''));
+        c.addEventListener('hover:enter', function () { a.run(); });
+        return c;
+    }
+
+    var page = null;
+
+    function pageToggle() { if (page) page.toggle(); }
+
+    /* one horizontal row of cards; cards are appended lazily in batches */
+    function makeRow(def, idx) {
+        var r = { def: def, els: [], shown: 0, active: 0, last: null };
+        r.scroll = new Lampa.Scroll({ horizontal: true, step: window.innerWidth / 4 });
+        r.html = $('<div class="extensions__block layer--visible layer--render"><div class="extensions__block-head"><div class="extensions__block-title"></div></div><div class="extensions__block-body"></div></div>');
+        var t = r.html.find('.extensions__block-title');
+        t.text(def.title); if (def.count) t.append($('<span></span>').text(def.count));
+        r.html.find('.extensions__block-body').append(r.scroll.render());
+        r.scroll.onWheel = function (step) {
+            if (!Lampa.Controller.own(r)) r.toggle();
+            Lampa.Controller.enabled().controller[step > 0 ? 'right' : 'left']();
+        };
+        r.more = function (n) {
+            var end = Math.min(def.items.length, r.shown + (n || 14));
+            for (; r.shown < end; r.shown++) {
+                (function (item, k) {
+                    var node = def.build(item);
+                    node.addEventListener('hover:focus', function () {
+                        r.last = node;
+                        var prev = r.active; r.active = k;
+                        if (k > 0 || prev > k) r.scroll.update(node, true);
+                        if (k >= r.shown - 4 && r.shown < def.items.length) r.more();
+                    });
+                    r.scroll.body(true).appendChild(node);
+                    r.els.push(node);
+                    if (Lampa.Controller.own(r)) Lampa.Controller.collectionAppend($(node));
+                })(def.items[r.shown], r.shown);
             }
+            try { Lampa.Layer.visible(r.scroll.render(true)); } catch (e) { /* ignore */ }
+        };
+        r.focusAt = function (k) { k = Math.max(0, Math.min(k, def.items.length - 1)); while (r.shown <= k && r.shown < def.items.length) r.more(); r.last = r.els[k] || null; r.active = k; };
+        r.toggle = function () {
+            Lampa.Controller.add('lampa_hub_line', {
+                link: r,
+                toggle: function () {
+                    Lampa.Controller.collectionSet(r.scroll.render(true));
+                    Lampa.Controller.collectionFocus(r.last || false, r.scroll.render(true));
+                    page.active = idx; page.scroll.update(r.html[0], true);
+                },
+                update: function () { },
+                right: function () { Navigator.move('right'); },
+                left: function () { Navigator.move('left'); },
+                down: function () { page.down(); },
+                up: function () { page.up(); },
+                back: function () { page.close(); }
+            });
+            Lampa.Controller.toggle('lampa_hub_line');
+        };
+        r.more();
+        return r;
+    }
+
+    function catRows(all, ctx) {
+        var g = {};
+        all.forEach(function (p) { (g[p.group || 'Разное'] = g[p.group || 'Разное'] || []).push(p); });
+        var names = Object.keys(g).sort(function (a, b) { return a === GH_GROUP ? 1 : b === GH_GROUP ? -1 : g[b].length - g[a].length; });
+        return names.map(function (n) {
+            var list = g[n].sort(function (x, y) {
+                return (x.found ? 1 : 0) - (y.found ? 1 : 0) || (y.popular ? 1 : 0) - (x.popular ? 1 : 0) || x.name.toLowerCase().localeCompare(y.name.toLowerCase());
+            });
+            return { id: 'cat:' + n, cat: n, title: n, count: list.length, items: list, build: function (p) { return pluginCard(p, ctx); } };
         });
     }
+
+    function planRows(state) {
+        var s = settings(), c = cache(), inst = installedMap(), nw = newIdsMap();
+        var full = buildCatalog(), all = full.filter(function (p) { return !(s.hide_github && p.group === GH_GROUP); });
+        var ctx = { inst: inst, nw: nw, all: full, after: function () { if (page) { page.rebuild(); } } };
+        var plug = function (p) { return pluginCard(p, ctx); };
+        var when = c.ts ? new Date(c.ts).toISOString().slice(0, 10) : (SEED && SEED.generated) || '—';
+        var instList = full.filter(function (p) { return inst[p.id]; });
+        var fresh = all.filter(function (p) { return p.updated && !p.found; }).sort(function (x, y) { return x.updated < y.updated ? 1 : -1; }).slice(0, 40);
+        var hist = history().slice(0, 60);
+        var popular = all.filter(function (p) { return p.popular && !p.found; });
+        var cats = catRows(all, ctx);
+
+        var actions = [
+            { title: 'Поиск', sub: state.q ? 'сейчас: «' + state.q + '» — нажмите, чтобы изменить' : 'по названию, описанию, автору', run: function () { page.search(all); } },
+            { title: 'Категории', sub: cats.length + ' категорий — перейти к нужной', run: function () { page.pickCategory(); } },
+            { title: 'Новое и обновлённое', sub: 'свежие по дате', run: function () { page.jump('fresh'); } },
+            { title: 'Установленные', sub: instList.length + ' шт.', run: function () { if (instList.length) page.jump('inst'); else noty('Пока ничего не установлено'); } },
+            { title: 'История', sub: history().length + ' записей: название, версия, дата, описание', run: function () { if (hist.length) page.jump('hist'); else noty('История пока пуста'); } },
+            { title: 'Обновить каталог', sub: 'магазины + автопоиск в GitHub · обновлён ' + when, run: function () { runRefresh(); } },
+            { title: 'Добавить по адресу', sub: 'установить плагин по ссылке', run: function () { page.addByUrl(); } },
+            { title: 'Источники', sub: 'какие магазины доступны', run: function () { showSources(pageToggle); } },
+            { title: 'Настройки', sub: 'автопоиск, обновление, свои магазины', run: function () { showSettings(function () { if (page) { page.rebuild(); } }); } }
+        ];
+        var rows = [{ id: 'actions', title: 'Хаб плагинов', count: all.length + ' плагинов без дублей', items: actions, build: actionCard }];
+        if (state.q) {
+            var q = state.q.toLowerCase();
+            var res = all.filter(function (p) { return [p.name, p.descr, p.author, p.url, (p.alt_names || []).join(' ')].join(' ').toLowerCase().indexOf(q) >= 0; });
+            rows.push({ id: 'search', title: 'Поиск: ' + state.q, count: res.length ? res.length + ' найдено' : 'ничего не найдено', items: res, build: plug });
+        }
+        if (instList.length) rows.push({ id: 'inst', title: 'Установленные', count: instList.length, items: instList, build: plug });
+        if (fresh.length) rows.push({ id: 'fresh', title: 'Новое и обновлённое', count: fresh.length, items: fresh, build: plug });
+        if (hist.length) rows.push({ id: 'hist', title: 'История', count: history().length, items: hist, build: function (e) { return historyCard(e, ctx); } });
+        if (popular.length) rows.push({ id: 'popular', title: 'Популярные', count: popular.length, items: popular, build: plug });
+        cats.forEach(function (r) { rows.push(r); });
+        return rows.filter(function (r) { return r.items.length || r.id === 'actions' || r.id === 'search'; });
+    }
+
+    function openPage() {
+        if (page) return;
+        injectCss();
+        var prev = Lampa.Controller.enabled().name;
+        var P = page = { rows: [], active: 0, state: { q: '' } };
+        P.html = $('<div class="extensions hub-page"><div class="extensions__body"></div></div>');
+        P.scroll = new Lampa.Scroll({ mask: true });
+        var head = Lampa.Template.get('head_backward', { title: 'Хаб плагинов v' + HUB_VERSION });
+        head.find('.head-backward__button').on('click', function () { Lampa.Controller.back(); });
+        P.scroll.append(head[0]);
+        P.scroll.height();
+        P.html.find('.extensions__body').append(P.scroll.render());
+        P.scroll.onWheel = function (step) { if (step > 0) P.down(); else P.up(); };
+
+        P.clear = function () {
+            P.rows.forEach(function (r) { try { r.scroll.destroy(); } catch (e) { /* ignore */ } r.html.remove(); });
+            P.rows = [];
+        };
+        P.fill = function (keepId, keepIdx) {
+            P.clear();
+            var plan = planRows(P.state), at = 0;
+            plan.forEach(function (def, i) {
+                if (def.id === keepId) at = i;
+                var r = makeRow(def, i);
+                P.scroll.body(true).appendChild(r.html[0]);
+                P.rows.push(r);
+            });
+            P.active = at;
+            if (P.rows[at] && keepIdx) P.rows[at].focusAt(keepIdx);
+        };
+        P.rebuild = function () {
+            var cur = P.rows[P.active];
+            P.fill(cur && cur.def.id, cur ? cur.active : 0);
+            P.toggle();
+        };
+        P.down = function () { if (P.active < P.rows.length - 1) { P.active++; P.rows[P.active].toggle(); } };
+        P.up = function () { if (P.active > 0) { P.active--; P.rows[P.active].toggle(); } };
+        P.jump = function (id) {
+            for (var i = 0; i < P.rows.length; i++) if (P.rows[i].def.id === id) { P.active = i; P.rows[i].toggle(); return; }
+        };
+        P.toggle = function () {
+            Lampa.Controller.add('lampa_hub', {
+                toggle: function () {
+                    Lampa.Controller.collectionSet(P.html[0]);
+                    if (P.rows.length) P.rows[P.active].toggle();
+                },
+                back: function () { P.close(); }
+            });
+            Lampa.Controller.toggle('lampa_hub');
+        };
+        P.search = function () {
+            Lampa.Input.edit({ title: 'Поиск плагина', value: P.state.q || '', free: true, nosave: true }, function (v) {
+                P.state.q = (v || '').trim();
+                P.fill('actions', 0); P.toggle();
+                if (P.state.q) P.jump('search');
+            });
+        };
+        P.pickCategory = function () {
+            var items = P.rows.filter(function (r) { return r.def.cat; }).map(function (r) { return { title: r.def.title, subtitle: r.def.count + ' шт.', id: r.def.id }; });
+            Lampa.Select.show({
+                title: 'Категории', items: items, onBack: function () { P.toggle(); },
+                onSelect: function (a) { setTimeout(function () { P.toggle(); P.jump(a.id); }, 10); }
+            });
+        };
+        P.addByUrl = function () {
+            Lampa.Input.edit({ title: 'Адрес плагина (https://…/plugin.js)', value: '', free: true, nosave: true }, function (v) {
+                v = (v || '').trim();
+                if (validUrl(v)) install({ id: keyOf(v), name: v.replace(/^https?:\/\//, '').split('/').slice(-1)[0] || v, url: v, sources: ['manual'] }, function () { P.rebuild(); });
+                else { if (v) noty('Некорректный адрес'); P.toggle(); }
+            });
+        };
+        P.close = function () {
+            P.clear();
+            try { P.scroll.destroy(); } catch (e) { /* ignore */ }
+            P.html.remove();
+            page = null;
+            $('body').removeClass('ambience--enable');
+            Lampa.Controller.toggle(prev);
+        };
+
+        P.fill('actions', 0);
+        $('body').addClass('ambience--enable').append(P.html);
+        P.toggle();
+    }
+
+    function showMain() { openPage(); }
 
     function infoRow(k, v) { return v ? '<div style="margin:.3em 0"><span style="opacity:.55">' + esc(k) + ':</span> ' + esc(v) + '</div>' : ''; }
 
@@ -448,7 +698,6 @@
             var b = $('<div class="simple-button selector" style="margin:.3em .6em .3em 0">' + esc(t) + '</div>');
             b.on('hover:enter', fn); btns.append(b);
         }
-        var prev = controllerName();
         function close(cb) { Lampa.Modal.close(); setTimeout(function () { cb && cb(); }, 30); }
         if (!inst) btn('Установить', function () { install(p, function () { close(function () { showDetail(p, back); }); }); });
         else {
@@ -458,21 +707,6 @@
         btn('Копировать адрес', function () { try { Lampa.Utils.copyTextToClipboard(p.url, function () { noty('Адрес скопирован'); }, function () { noty(p.url); }); } catch (e) { noty(p.url); } });
         html.append(btns);
         Lampa.Modal.open({ title: p.name, html: html, size: 'medium', onBack: function () { close(back); } });
-    }
-
-    function showHistory(back) {
-        var h = history();
-        if (!h.length) { noty('История пока пуста'); return back(); }
-        var items = h.slice(0, 200).map(function (e) {
-            return { title: e.date + ' · ' + e.name + (e.version ? ' v' + e.version : ''), subtitle: (TYPE_TXT[e.type] || e.type) + (e.updated ? ' · обновлён ' + e.updated : '') + (e.descr ? '\n' + clip(e.descr, 100) : ''), entry: e };
-        });
-        Lampa.Select.show({
-            title: 'История (' + h.length + ')', items: items, onBack: back,
-            onSelect: function (a) {
-                var e = a.entry, c = buildCatalog().filter(function (p) { return p.id === e.id; })[0] || { id: e.id, name: e.name, url: e.url, version: e.version, descr: e.descr, author: e.author, group: e.group, sources: e.sources, updated: e.updated };
-                setTimeout(function () { showDetail(c, function () { showHistory(back); }); }, 10);
-            }
-        });
     }
 
     function showSources(back) {
@@ -512,69 +746,12 @@
         });
     }
 
-    function runRefresh(back, deep) {
+    function runRefresh() {
         noty('Обновляю каталог…');
-        refresh({ deep: deep }, function (err, r) {
-            if (err === 'busy') noty('Уже обновляется'); else if (r) noty('Готово: ' + r.total + ' плагинов, новых ' + r.nNew + ', обновлений версий ' + r.nUpd + ', источников OK ' + r.ok + (r.bad ? ', недоступно ' + r.bad : ''));
-            back && back();
-        });
-    }
-
-    function groupsOf(list) { var g = {}; list.forEach(function (p) { g[p.group] = (g[p.group] || 0) + 1; }); return g; }
-
-    function showCategories(back) {
-        var s = settings(), all = buildCatalog().filter(function (p) { return !(s.hide_github && p.group === GH_GROUP); });
-        var g = groupsOf(all), names = Object.keys(g).sort(function (a, b) { return a === GH_GROUP ? 1 : b === GH_GROUP ? -1 : g[b] - g[a]; });
-        var items = [{ title: 'Все плагины', subtitle: all.length + ' шт.', all: true }].concat(names.map(function (n) { return { title: n, subtitle: g[n] + ' шт.', name: n }; }));
-        Lampa.Select.show({
-            title: 'Категории', items: items, onBack: back,
-            onSelect: function (a) {
-                var list = a.all ? all : all.filter(function (p) { return p.group === a.name; });
-                list.sort(function (x, y) {
-                    return (x.found ? 1 : 0) - (y.found ? 1 : 0) || (y.popular ? 1 : 0) - (x.popular ? 1 : 0) || x.name.toLowerCase().localeCompare(y.name.toLowerCase());
-                });
-                setTimeout(function () { showList(a.title, list, function () { showCategories(back); }); }, 10);
-            }
-        });
-    }
-
-    function showMain() {
-        var all = buildCatalog(), c = cache(), inst = installedMap();
-        var instCount = all.filter(function (p) { return inst[p.id]; }).length;
-        var when = c.ts ? new Date(c.ts).toISOString().slice(0, 10) : (SEED && SEED.generated) || '—';
-        var back = function () { try { Lampa.Controller.toggle('settings_component'); } catch (e) { /* ignore */ } };
-        var again = function () { setTimeout(showMain, 10); };
-        var items = [
-            { title: 'Каталог', subtitle: all.length + ' плагинов без дублей · обновлён ' + when, k: 'cat' },
-            { title: 'Поиск', subtitle: 'по названию, описанию, автору', k: 'search' },
-            { title: 'Новое и обновлённое', subtitle: 'свежие по дате', k: 'new' },
-            { title: 'Установленные', subtitle: instCount + ' шт.', k: 'inst' },
-            { title: 'История', subtitle: history().length + ' записей: название, версия, дата, описание', k: 'hist' },
-            { title: 'Обновить каталог', subtitle: 'магазины + автопоиск в GitHub', k: 'refresh' },
-            { title: 'Источники', subtitle: 'какие магазины доступны', k: 'src' },
-            { title: 'Настройки', k: 'set' }
-        ];
-        Lampa.Select.show({
-            title: 'Хаб плагинов v' + HUB_VERSION, items: items, onBack: back,
-            onSelect: function (a) {
-                var s = settings();
-                var cat = all.filter(function (p) { return !(s.hide_github && p.group === GH_GROUP); });
-                setTimeout(function () {
-                    if (a.k === 'cat') showCategories(again);
-                    else if (a.k === 'search') Lampa.Input.edit({ title: 'Поиск плагина', value: '', free: true, nosave: true }, function (v) {
-                        v = (v || '').toLowerCase().trim();
-                        if (!v) return again();
-                        var res = cat.filter(function (p) { return [p.name, p.descr, p.author, p.url, (p.alt_names || []).join(' ')].join(' ').toLowerCase().indexOf(v) >= 0; });
-                        showList('Поиск: ' + v, res, again);
-                    });
-                    else if (a.k === 'new') showList('Новое и обновлённое', cat.filter(function (p) { return p.updated; }).sort(function (x, y) { return x.updated < y.updated ? 1 : -1; }).slice(0, 60), again);
-                    else if (a.k === 'inst') showList('Установленные', all.filter(function (p) { return inst[p.id]; }), again);
-                    else if (a.k === 'hist') showHistory(again);
-                    else if (a.k === 'refresh') runRefresh(again, true);
-                    else if (a.k === 'src') showSources(again);
-                    else if (a.k === 'set') showSettings(again);
-                }, 10);
-            }
+        refresh({ deep: true }, function (err, r) {
+            if (err === 'busy') noty('Уже обновляется');
+            else if (r) noty('Готово: ' + r.total + ' плагинов, новых ' + r.nNew + ', обновлений версий ' + r.nUpd + ', источников OK ' + r.ok + (r.bad ? ', недоступно ' + r.bad : ''));
+            if (page) page.rebuild();
         });
     }
 

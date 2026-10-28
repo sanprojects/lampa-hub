@@ -324,7 +324,13 @@
         if (!v) return done && done();
         if (!v.local) { noty('Установлен через CUB — удалить можно только на cub.best, здесь его можно лишь выключить'); return done && done(); }
         touch(p.id);
-        Lampa.Plugins.remove(v.local);
+        /* одна и та же ссылка могла быть добавлена дважды (хаб + штатный раздел, http/https): убираем все записи */
+        var keys = {}; keys[p.id] = 1; keys[keyOf(v.url)] = 1;
+        (p.mirrors || []).forEach(function (m) { keys[keyOf(m)] = 1; });
+        var same = [];
+        try { Lampa.Plugins.get().forEach(function (x) { if (x && x.url && keys[keyOf(x.url)]) same.push(x); }); } catch (e) { /* ignore */ }
+        if (same.indexOf(v.local) < 0) same.push(v.local);
+        same.forEach(function (x) { Lampa.Plugins.remove(x); });
         if (v.cub && v.cub.status) {
             v.cub.status = 0;
             try { Lampa.Account.Api.pluginToggle(v.cub, 0); } catch (e) { /* offline */ }
@@ -1014,7 +1020,7 @@
             b.on('hover:enter', fn); btns.append(b);
         }
         /* закрыть диалог сразу и обновить карточку на месте: без перерисовки страницы */
-        function finish() { Lampa.Modal.close(); setTimeout(function () { refreshCards(p.id); syncReload(); back && back(); }, 30); }
+        function finish() { Lampa.Modal.close(); setTimeout(function () { refreshCards(); syncReload(); back && back(); }, 30); }
         if (!inst) btn('Установить', function () { install(p, finish); });
         else {
             btn(inst.status ? 'Выключить' : 'Включить', function () { toggle(p, finish); });

@@ -1,4 +1,4 @@
-# Lampa Hub
+# Lampa Hub (Хаб расширений)
 
 One Lampa plugin store that merges lampaplugins, k03mad, skaztv, bylampa and lampaguide, dedupes by normalized URL, auto-discovers plugins on GitHub, and keeps a per-plugin history (name, version, date, description, sources, install events).
 

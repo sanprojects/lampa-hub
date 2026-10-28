@@ -296,9 +296,14 @@
         if (!v) return done && done();
         if (!v.local) { noty('Установлен через CUB — удалить можно только на cub.best, здесь его можно лишь выключить'); return done && done(); }
         Lampa.Plugins.remove(v.local);
+        if (v.cub && v.cub.status) {
+            v.cub.status = 0;
+            try { Lampa.Account.Api.pluginToggle(v.cub, 0); } catch (e) { /* offline */ }
+            lset('account_plugins', cubAll());
+        }
         dirty();
         logEvent('removed', p);
-        noty('Удалён: ' + p.name + (v.cub ? '. Из CUB он не удаляется, только выключается' : '. Перезагрузите Lampa, чтобы он перестал работать'));
+        noty('Удалён: ' + p.name + (v.cub ? '. В CUB он выключен, удалить его оттуда можно на cub.best' : '. Перезагрузите Lampa, чтобы он перестал работать'));
         done && done();
     }
     function toggle(p, done) {
@@ -748,7 +753,7 @@
             { title: 'Источники', sub: 'какие магазины доступны', run: function () { showSources(pageToggle); } },
             { title: 'Настройки', sub: 'автопоиск, обновление, свои магазины', run: function () { showSettings(function () { if (page) { page.rebuild(); } }); } }
         ];
-        var rows = [{ id: 'actions', title: 'Хаб плагинов', count: all.length + ' плагинов без дублей', items: actions, build: actionCard }];
+        var rows = [{ id: 'actions', title: 'Хаб расширений', count: all.length + ' расширений без дублей', items: actions, build: actionCard }];
         if (state.q) {
             var q = state.q.toLowerCase();
             var res = all.filter(function (p) { return [p.name, p.descr, p.author, p.url, (p.alt_names || []).join(' ')].join(' ').toLowerCase().indexOf(q) >= 0; });
@@ -769,7 +774,7 @@
         var P = page = { rows: [], active: 0, state: { q: '' } };
         P.html = $('<div class="extensions hub-page"><div class="extensions__body"></div></div>');
         P.scroll = new Lampa.Scroll({ mask: true });
-        var head = Lampa.Template.get('head_backward', { title: 'Хаб плагинов v' + HUB_VERSION });
+        var head = Lampa.Template.get('head_backward', { title: 'Хаб расширений v' + HUB_VERSION });
         head.find('.head-backward__button').on('click', function () { Lampa.Controller.back(); });
         P.scroll.append(head[0]);
         P.scroll.height();
@@ -1084,7 +1089,7 @@
         var field = host.find('[data-component="lampa_hub"]');
         if (!field.length) {
             field = $('<div class="settings-folder selector" data-component="lampa_hub" data-static="true"><div class="settings-folder__icon">' + ICON +
-                '</div><div class="settings-folder__name">Хаб плагинов</div></div>');
+                '</div><div class="settings-folder__name">Хаб расширений</div></div>');
             var anchor = host.find('[data-component="plugins"]');
             if (!anchor.length) anchor = host.find('[data-component="more"]');
             if (!anchor.length) anchor = host.find('.settings-folder').last();

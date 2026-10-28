@@ -19,6 +19,8 @@
         { name: 'lampaguide', url: 'https://lampaguide.com/plugins', kind: 'lampaguide' }
     ];
     var PRIORITY = ['lampaplugins', 'skaztv', 'k03mad', 'bylampa', 'lampaguide', 'github'];
+    /* доверенные источники: магазины, из которых собран хаб (их плагины идут первыми) */
+    var TRUSTED = ['lampaplugins', 'skaztv', 'k03mad', 'bylampa', 'lampaguide'];
     var GH_QUERIES = ['topic:lampa-plugin', 'topic:lampa-plugins', 'lampa plugin in:name,description fork:false'];
 
     /* ------------------------------------------------------------------ helpers */
@@ -254,34 +256,65 @@
     var TYPE_TXT = { installed: 'установлен', removed: 'удалён', updated: 'обновление версии', 'new': 'новый в каталоге', enabled: 'включён', disabled: 'выключен', checked: 'проверен' };
 
     /* ------------------------------------------------------------------ installed plugins */
+    /* Установленные плагины: локальные (Lampa.Plugins) и из аккаунта CUB (account_plugins). Как и в оригинальном
+       «Расширения», плагин из CUB можно включить/выключить (через Account.Api.pluginToggle), но не удалить. */
+    var instMemo = null, cubMem = null;
+    function dirty() { instMemo = null; cubMem = null; }
+    function cubAll() {
+        if (!cubMem) {
+            var a = ls('account_plugins', '[]');
+            if (typeof a === 'string') { try { a = JSON.parse(a); } catch (e) { a = []; } }
+            cubMem = Object.prototype.toString.call(a) === '[object Array]' ? a : [];
+        }
+        return cubMem;
+    }
     function installedMap() {
+        if (instMemo) return instMemo;
         var m = {};
-        try { Lampa.Plugins.get().forEach(function (p) { m[keyOf(p.url)] = p; }); } catch (e) { /* ignore */ }
-        return m;
+        try { Lampa.Plugins.get().forEach(function (p) { m[keyOf(p.url)] = { url: p.url, status: p.status ? 1 : 0, name: p.name, local: p, cub: null }; }); } catch (e) { /* ignore */ }
+        cubAll().forEach(function (c) {
+            if (!c || !c.url) return;
+            var k = keyOf(c.url), v = m[k] || (m[k] = { url: c.url, status: 0, name: c.name, local: null, cub: null });
+            v.cub = c; v.status = v.status || c.status ? 1 : 0;
+        });
+        (SEED && SEED.plugins || []).forEach(function (p) {
+            if (m[p.id] || !p.mirrors) return;
+            for (var i = 0; i < p.mirrors.length; i++) { var a = m[keyOf(p.mirrors[i])]; if (a) { m[p.id] = a; return; } }
+        });
+        return (instMemo = m);
     }
     function install(p, done) {
-        var inst = installedMap();
-        if (inst[p.id]) { noty('Уже установлен'); return done && done(); }
+        if (installedMap()[p.id]) { noty('Уже установлен'); return done && done(); }
         Lampa.Plugins.add({ url: p.url, status: 1, name: p.name, author: p.author || '@hub' });
+        dirty();
         logEvent('installed', p);
         noty('Установлен: ' + p.name);
         done && done();
     }
     function uninstall(p, done) {
-        var plug = installedMap()[p.id];
-        if (!plug) return done && done();
-        Lampa.Plugins.remove(plug);
+        var v = installedMap()[p.id];
+        if (!v) return done && done();
+        if (!v.local) { noty('Установлен через CUB — удалить можно только на cub.best, здесь его можно лишь выключить'); return done && done(); }
+        Lampa.Plugins.remove(v.local);
+        dirty();
         logEvent('removed', p);
-        noty('Удалён: ' + p.name + '. Перезагрузите Lampa, чтобы он перестал работать');
+        noty('Удалён: ' + p.name + (v.cub ? '. Из CUB он не удаляется, только выключается' : '. Перезагрузите Lampa, чтобы он перестал работать'));
         done && done();
     }
     function toggle(p, done) {
-        var plug = installedMap()[p.id];
-        if (!plug) return done && done();
-        plug.status = plug.status ? 0 : 1;
-        Lampa.Plugins.save();
-        logEvent(plug.status ? 'enabled' : 'disabled', p);
-        noty((plug.status ? 'Включён: ' : 'Выключен: ') + p.name + '. Нужна перезагрузка');
+        var v = installedMap()[p.id];
+        if (!v) return done && done();
+        var st = v.status ? 0 : 1;
+        if (v.local) { v.local.status = st; Lampa.Plugins.save(); }
+        if (v.cub) {
+            v.cub.status = st;
+            try { Lampa.Account.Api.pluginToggle(v.cub, st); } catch (e) { /* offline */ }
+            lset('account_plugins', cubAll());
+        }
+        if (st) { try { Lampa.Plugins.push(v.local || v.cub); } catch (e) { /* loads on next start */ } }
+        dirty();
+        logEvent(st ? 'enabled' : 'disabled', p);
+        noty((st ? 'Включён: ' : 'Выключен: ') + p.name + (st ? '' : '. Нужна перезагрузка'));
         done && done();
     }
 
@@ -427,6 +460,18 @@
         '.hub-card .hub-meta{font-size:.78em;color:#8D8D8D;margin-top:.5em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
         '.hub-card .hub-meta b{color:#ffd666;font-weight:600;margin-right:.7em}' +
         '.hub-card .hub-url{font-size:.78em;color:#8D8D8D;opacity:.75;margin-top:.3em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
+        '.hub-card .hub-url{display:flex;align-items:center}' +
+        '.hub-card .hub-url span{overflow:hidden;text-overflow:ellipsis}' +
+        '.hub-fav{width:1.1em;height:1.1em;margin-right:.45em;flex-shrink:0;border-radius:.2em}' +
+        '.hub-card .hub-flags{font-size:.78em;margin-top:.3em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
+        '.hub-flags span{margin-right:.8em}.hub-flag--ok{color:#6DCE4B}.hub-flag--warn{color:#ffd016}.hub-flag--risk{color:#ff6e6e}' +
+        '.hub-rd{padding:.7em 1em;margin:.4em 0;border-radius:.4em;background-color:rgba(255,255,255,.04);line-height:1.45}' +
+        '.hub-rd.focus{background-color:rgba(255,255,255,.14)}' +
+        '.hub-rd__t{font-weight:600;margin-bottom:.4em}.hub-rd__l{margin:.15em 0;word-break:break-word}.hub-rd__k{color:#8D8D8D}' +
+        '.hub-rd__note{font-size:.85em;color:#8D8D8D}' +
+        '.hub-rd--h{font-weight:600;font-size:1.1em}.hub-rd--li{padding-top:.3em;padding-bottom:.3em}' +
+        '.hub-rd--code{font-family:monospace;font-size:.85em;white-space:pre-wrap;word-break:break-all}' +
+        '.hub-btns{display:flex;flex-wrap:wrap;margin-bottom:.6em}' +
         '.hub-badge{position:absolute;top:0;right:0;background-color:rgba(0,0,0,.18);border-radius:.3em;padding:.3em .4em .4em;font-size:.78em}' +
         '.hub-badge--free{color:#6DCE4B}.hub-badge--shareware{color:#ffd016}.hub-badge--paid{color:#8D8D8D}.hub-badge--bad{color:#ff9d6e}' +
         '.hub-card .extensions__item-footer .extensions__item-included{position:static;width:1.2em;height:1.2em;padding-top:.24em;margin:0 .5em 0 0;flex-shrink:0;background-color:rgba(0,0,0,.18)}' +
@@ -516,7 +561,16 @@
         if (o.stars) meta.appendChild(el('b', '', '★ ' + o.stars));
         meta.appendChild(document.createTextNode([o.version ? 'v' + o.version : '', o.date || ''].filter(Boolean).join(' · ')));
         if (meta.textContent) body.appendChild(meta);
-        if (o.statusUrl) body.appendChild(el('div', 'hub-url', shortUrl(o.statusUrl)));
+        if (o.statusUrl) {
+            var ur = el('div', 'hub-url');
+            ur.appendChild(fav(o.domain || (o.statusUrl.split('/')[2] || '')));
+            ur.appendChild(el('span', '', shortUrl(o.statusUrl)));
+            body.appendChild(ur);
+        }
+        var fl = el('div', 'hub-flags');
+        if (o.trusted) fl.appendChild(el('span', 'hub-flag--ok', '✔ Доверенный'));
+        if (o.scan) { var sh = SCAN_SHORT[o.scan.v]; if (sh) fl.appendChild(el('span', 'hub-flag--' + o.scan.v, sh)); }
+        if (fl.firstChild) body.appendChild(fl);
         var foot = el('div', 'extensions__item-footer');
         if (o.check) foot.appendChild(el('div', 'extensions__item-included'));
         if (o.statusUrl) {
@@ -529,14 +583,42 @@
         return c;
     }
 
+    /* Живые карточки плагинов: после установки/удаления/переключения обновляются на месте, без перестройки страницы */
+    var cards = {};
+    function badgeOf(p, v, nw) {
+        if (v) return v.status ? ['Установлен', 'free'] : ['Выключен', 'bad'];
+        if (nw[p.id]) return ['Новое', 'shareware'];
+        if (p.found) return ['GitHub', 'paid'];
+        return null;
+    }
+    function decorate(c, p, v, nw) {
+        var body = c.querySelector('.extensions__item-body'), foot = c.querySelector('.extensions__item-footer');
+        var b = body.querySelector('.hub-badge'), badge = badgeOf(p, v, nw);
+        if (!badge) { if (b) b.parentNode.removeChild(b); }
+        else {
+            if (!b) { b = el('div'); body.insertBefore(b, body.firstChild); }
+            b.className = 'hub-badge hub-badge--' + badge[1]; b.textContent = badge[0];
+        }
+        var ch = foot.querySelector('.extensions__item-included'), on = !!(v && v.status);
+        if (on && !ch) foot.insertBefore(el('div', 'extensions__item-included'), foot.firstChild);
+        else if (!on && ch) foot.removeChild(ch);
+        var tag = c.querySelector('.extensions__cub');
+        if (v && v.cub && !tag) c.appendChild(el('div', 'extensions__cub', 'CUB'));
+        else if (!(v && v.cub) && tag) c.removeChild(tag);
+    }
+    function refreshCards(id) {
+        var inst = installedMap();
+        (id ? [id] : Object.keys(cards)).forEach(function (k) {
+            (cards[k] || []).forEach(function (r) { decorate(r.node, r.p, inst[k], r.nw); });
+        });
+    }
+
     function pluginCard(p, ctx) {
-        var i = ctx.inst[p.id], badge = null;
-        if (i) badge = i.status ? ['Установлен', 'free'] : ['Выключен', 'bad'];
-        else if (ctx.nw[p.id]) badge = ['Новое', 'shareware'];
-        else if (p.found) badge = ['GitHub', 'paid'];
         var c = baseCard({ name: p.name, seed: p.id, author: authorOf(p), descr: p.descr, stars: p.stars, version: p.version, date: p.updated,
-            avatar: ownerOf(p), img: p.img, check: i && i.status, badge: badge, statusUrl: p.url, probe: p.probe });
-        c.addEventListener('hover:enter', function () { showDetail(p, ctx.after); });
+            avatar: ownerOf(p), img: p.img, statusUrl: p.url, probe: p.probe, domain: p.domain, trusted: isTrusted(p), scan: p.scan });
+        decorate(c, p, installedMap()[p.id], ctx.nw);
+        (cards[p.id] = cards[p.id] || []).push({ node: c, p: p, nw: ctx.nw });
+        c.addEventListener('hover:enter', function () { showDetail(p, pageToggle); });
         return c;
     }
 
@@ -548,7 +630,7 @@
         c.addEventListener('hover:enter', function () {
             var p = ctx.all.filter(function (x) { return x.id === e.id; })[0] || { id: e.id, name: e.name, url: e.url, version: e.version, descr: e.descr,
                 author: e.author, group: e.group, sources: e.sources || [], updated: e.updated };
-            showDetail(p, ctx.after);
+            showDetail(p, pageToggle);
         });
         return c;
     }
@@ -617,14 +699,21 @@
         return r;
     }
 
+    /* доверенные первыми, затем звёзды GitHub, затем свежесть обновления, затем возраст аккаунта автора (старше — выше) */
+    function isTrusted(p) { return p.trusted || (p.sources || []).some(function (s) { return TRUSTED.indexOf(s) >= 0; }); }
+    function cmp(a, b) { return a < b ? -1 : a > b ? 1 : 0; }
+    function byTrust(x, y) {
+        return cmp(isTrusted(y) ? 1 : 0, isTrusted(x) ? 1 : 0) || cmp(y.stars || 0, x.stars || 0) ||
+            cmp(y.updated || y.pushed || '', x.updated || x.pushed || '') ||
+            cmp(x.owner_created || '9999', y.owner_created || '9999') || cmp(x.name.toLowerCase(), y.name.toLowerCase());
+    }
+
     function catRows(all, ctx) {
         var g = {};
         all.forEach(function (p) { (g[p.group || 'Разное'] = g[p.group || 'Разное'] || []).push(p); });
         var names = Object.keys(g).sort(function (a, b) { return a === GH_GROUP ? 1 : b === GH_GROUP ? -1 : g[b].length - g[a].length; });
         return names.map(function (n) {
-            var list = g[n].sort(function (x, y) {
-                return (x.found ? 1 : 0) - (y.found ? 1 : 0) || (y.popular ? 1 : 0) - (x.popular ? 1 : 0) || x.name.toLowerCase().localeCompare(y.name.toLowerCase());
-            });
+            var list = g[n].sort(byTrust);
             return { id: 'cat:' + n, cat: n, title: n, count: list.length, items: list, build: function (p) { return pluginCard(p, ctx); } };
         });
     }
@@ -632,7 +721,7 @@
     function planRows(state) {
         var s = settings(), c = cache(), inst = installedMap(), nw = newIdsMap();
         var full = buildCatalog(), all = full.filter(function (p) { return !(s.hide_github && p.group === GH_GROUP); });
-        var ctx = { inst: inst, nw: nw, all: full, after: function () { if (page) { page.rebuild(); } } };
+        var ctx = { inst: inst, nw: nw, all: full };
         var plug = function (p) { return pluginCard(p, ctx); };
         var when = c.ts ? new Date(c.ts).toISOString().slice(0, 10) : (SEED && SEED.generated) || '—';
         var instList = full.filter(function (p) { return inst[p.id]; });
@@ -668,7 +757,7 @@
 
     function openPage() {
         if (page) return;
-        injectCss();
+        injectCss(); dirty();
         var prev = Lampa.Controller.enabled().name;
         var P = page = { rows: [], active: 0, state: { q: '' } };
         P.html = $('<div class="extensions hub-page"><div class="extensions__body"></div></div>');
@@ -682,7 +771,7 @@
 
         P.clear = function () {
             P.rows.forEach(function (r) { try { r.scroll.destroy(); } catch (e) { /* ignore */ } r.html.remove(); });
-            P.rows = [];
+            P.rows = []; cards = {};
         };
         P.fill = function (keepId, keepIdx) {
             P.clear();
@@ -748,44 +837,145 @@
 
         P.fill('actions', 0);
         $('body').addClass('ambience--enable').append(P.html);
+        /* без этого у скролла страницы нет высоты и «вниз» не прокручивает к нижним категориям */
+        try { Lampa.Layer.update(P.html); } catch (e) { /* ignore */ }
         P.toggle();
+        try { Lampa.Account.Api.plugins(function () { if (page === P) { dirty(); refreshCards(); } }); } catch (e) { /* not logged in */ }
     }
 
     function showMain() { openPage(); }
 
-    function infoRow(k, v) { return v ? '<div style="margin:.3em 0"><span style="opacity:.55">' + esc(k) + ':</span> ' + esc(v) + '</div>' : ''; }
+    /* ---- карточка плагина: блоки-«селекторы», чтобы пультом можно было прокрутить длинное содержимое ---- */
+    var SCAN_SHORT = { ok: '✓ Код проверен', warn: '! Есть замечания', risk: '✕ Подозрительно' };
+    var FAV = 'https://www.google.com/s2/favicons?sz=32&domain=';
+    var SCAN_TXT = {
+        miner: 'похоже на майнер', stealer: 'читает данные аккаунта/пароли и обращается к чужим адресам', eval: 'eval / динамически исполняемый код',
+        obf: 'обфусцированный код — прочитать нельзя', cookie: 'работает с cookie', beacon: 'отправляет данные через sendBeacon', write: 'document.write',
+        ipurl: 'обращается к серверам по IP-адресу', loader: 'подгружает другие скрипты', http: 'ставится по http — без шифрования'
+    };
+    var SCAN_HEAD = { ok: ['✓ Проверка кода: замечаний нет', 'ok'], warn: ['! Проверка кода: есть замечания', 'warn'], risk: ['✕ Проверка кода: подозрительно', 'risk'] };
+    function fav(host) {
+        var i = el('img', 'hub-fav'); i.onerror = function () { i.style.display = 'none'; }; i.src = FAV + encodeURIComponent(host); return i;
+    }
+    function kv(k, v) { if (v == null || v === '') return null; var d = el('div', 'hub-rd__l'); d.appendChild(el('span', 'hub-rd__k', k + ': ')); d.appendChild(document.createTextNode(v + '')); return d; }
+    function block(title, rows) {
+        rows = rows.filter(Boolean);
+        if (!rows.length) return null;
+        var d = el('div', 'hub-rd selector');
+        if (title) d.appendChild(el('div', 'hub-rd__t', title));
+        rows.forEach(function (r) { d.appendChild(typeof r === 'string' ? el('div', 'hub-rd__l', r) : r); });
+        return d;
+    }
+    function ageOf(d) {
+        if (!d) return '';
+        var y = (Date.now() - new Date(d).getTime()) / 31557600000;
+        return d + (y >= 1 ? ' (' + Math.floor(y) + ' л.)' : ' (< года)');
+    }
+    function scanBlock(p) {
+        var sc = p.scan;
+        if (!sc) return block('Проверка кода', ['Не проверялся: сборка не смогла скачать скрипт.']);
+        var h = SCAN_HEAD[sc.v] || SCAN_HEAD.ok, rows = [];
+        var t = el('div', 'hub-rd__l hub-flag--' + h[1], h[0]); rows.push(t);
+        (sc.f || []).forEach(function (c) { rows.push('• ' + (SCAN_TXT[c] || c)); });
+        if (sc.h && sc.h.length) rows.push(kv('Внешние адреса в коде' + (sc.n > sc.h.length ? ' (' + sc.n + ', первые ' + sc.h.length + ')' : ''), sc.h.join(', ')));
+        rows.push(el('div', 'hub-rd__l hub-rd__note', 'Автоматический поиск подозрительных приёмов при сборке каталога. Это не гарантия безопасности — только то, что нашлось по шаблонам.'));
+        return block('Проверка кода', rows);
+    }
+    function githubBlock(p) {
+        if (!p.repo) return null;
+        var own = p.repo.split('/')[0];
+        return block('GitHub', [kv('Репозиторий', p.repo), kv('Звёзды', p.stars != null ? '★ ' + p.stars : ''), kv('Форки', p.forks), kv('Лицензия', p.license),
+            p.archived ? el('div', 'hub-rd__l hub-flag--warn', '! Репозиторий в архиве — не поддерживается') : null,
+            kv('Открытых issues', p.issues), kv('Автор', own + (p.owner_type ? ' (' + (p.owner_type === 'Organization' ? 'организация' : 'пользователь') + ')' : '')),
+            kv('Подписчиков у автора', p.owner_followers), kv('Репозиториев у автора', p.owner_repos), kv('Аккаунт создан', ageOf(p.owner_created)),
+            kv('Репозиторий создан', ageOf(p.created)), kv('Последний коммит', p.pushed), kv('Темы', (p.topics || []).join(', ')), kv('Ссылка', p.homepage)]);
+    }
+
+    /* README: простой разбор Markdown в DOM только через textContent — без HTML, ссылок, картинок и скриптов */
+    function mdBlocks(md) {
+        md = (md + '').replace(/\r/g, '').replace(/<!--[\s\S]*?-->/g, '').replace(/<(script|style)[\s\S]*?<\/\1>/gi, '');
+        var out = [], para = [], code = null;
+        function inline(t) {
+            return t.replace(/!\[[^\]]*\]\([^)]*\)/g, '').replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').replace(/<[^>]+>/g, '').replace(/[*_`~]{1,3}/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
+        }
+        function flush() { if (para.length) { var t = inline(para.join(' ')); if (t) out.push(['p', t]); para = []; } }
+        md.split('\n').forEach(function (ln) {
+            if (/^\s*(```|~~~)/.test(ln)) { if (code) { out.push(['code', code.join('\n')]); code = null; } else { flush(); code = []; } return; }
+            if (code) { code.push(ln); return; }
+            var h = ln.match(/^\s{0,3}(#{1,6})\s+(.*)$/);
+            if (h) { flush(); var t = inline(h[2]); if (t) out.push(['h', t]); return; }
+            var li = ln.match(/^\s*(?:[-*+]|\d+[.)])\s+(.*)$/);
+            if (li) { flush(); var l = inline(li[1]); if (l) out.push(['li', '• ' + l]); return; }
+            if (!ln.trim() || /^\s*(?:[-*_]\s*){3,}$/.test(ln) || /^\s*\|?[\s:-]+\|[\s|:-]*$/.test(ln)) { flush(); return; }
+            para.push(ln.replace(/^\s*>\s?/, ''));
+        });
+        flush();
+        if (code && code.length) out.push(['code', code.join('\n')]);
+        return out;
+    }
+    function showReadme(p, back) {
+        function open(content) {
+            Lampa.Modal.open({ title: 'README · ' + p.name, html: content, size: 'large', onBack: function () { Lampa.Modal.close(); setTimeout(function () { back && back(); }, 30); } });
+        }
+        var wait = $('<div></div>'); wait.append(block('', ['Загружаю README…']));
+        open(wait);
+        http('https://cdn.jsdelivr.net/gh/' + p.rd, { timeout: 12000 }, function (txt) {
+            var wrap = $('<div></div>'), n = 0, size = 0;
+            mdBlocks(txt).forEach(function (b) {
+                if (n > 70 || size > 9000) return;
+                var d = el('div', 'hub-rd selector hub-rd--' + b[0]);
+                var t = b[1].length > 700 ? b[1].slice(0, 699) + '…' : b[1];
+                d.textContent = t; size += t.length; n++;
+                wrap.append(d);
+            });
+            if (!n) wrap.append(block('', ['README пустой или не содержит текста.']));
+            else wrap.append(block('', [el('div', 'hub-rd__l hub-rd__note', 'Показан только текст README (без картинок и ссылок). Полный — ' + (p.homepage || p.repo) + '.')]));
+            try { Lampa.Modal.update(wrap); } catch (e) { /* closed meanwhile */ }
+        }, function () {
+            var w = $('<div></div>'); w.append(block('', ['Не удалось загрузить README (' + p.rd + ').']));
+            try { Lampa.Modal.update(w); } catch (e) { /* closed meanwhile */ }
+        });
+    }
 
     function showDetail(p, back) {
         var inst = installedMap()[p.id], pr = p.probe || {};
+        var where = inst ? (inst.cub ? 'CUB' + (inst.local ? ' + локально' : '') : 'локально') : '';
         var hist = history().filter(function (h) { return h.id === p.id; }).slice(0, 8);
-        var html = $('<div class="about"></div>');
-        var body = infoRow('Версия', p.version) + infoRow('Обновлён', p.updated) + infoRow('Автор', p.author) + infoRow('Категория', p.group) +
-            infoRow('Статус', inst ? (inst.status ? 'установлен, включён' : 'установлен, выключен') : 'не установлен') +
-            infoRow('Описание', p.descr) + infoRow('Адрес', p.url) + infoRow('Проверка', (function (r) { return r ? r.code + ' · ' + r.txt : ''; })(statFresh(p.url))) + infoRow('Зеркала', (p.mirrors || []).join(', ')) +
-            infoRow('Другие названия', (p.alt_names || []).join(', ')) + infoRow('Найден в', (p.sources || []).join(', ')) +
-            infoRow('На lampaguide', p.status) + infoRow('Страница', p.page) +
-            infoRow('GitHub', p.repo ? p.repo + (p.stars ? ' ★' + p.stars : '') : '') + infoRow('Репозиторий', p.homepage) + infoRow('Темы', (p.topics || []).join(', ')) +
-            infoRow('Лицензия', p.license) + infoRow('Изменён в репозитории', p.pushed) +
-            infoRow('Размер', pr.size ? Math.round(pr.size / 1024) + ' КБ' : '') + infoRow('Проверен', pr.checked) +
-            (p.found ? '<div style="margin:.6em 0;opacity:.7">Найден автопоиском в GitHub — код не проверялся, ставьте на свой риск.</div>' : '');
-        if (hist.length) body += '<div style="margin-top:.6em;opacity:.55">История:</div>' + hist.map(function (h) {
-            return '<div style="margin:.15em 0">' + esc(h.date + ' — ' + (TYPE_TXT[h.type] || h.type) + (h.version ? ' (v' + h.version + ')' : '') + (h.extra && h.extra.from ? ' ' + h.extra.from + ' → ' + h.extra.to : '')) + '</div>';
-        }).join('');
-        html.append('<div style="font-size:.9em;line-height:1.35;word-break:break-word">' + body + '</div>');
-        var btns = $('<div style="margin-top:1em;display:flex;flex-wrap:wrap"></div>');
+        var html = $('<div class="about hub-detail"></div>');
+        var btns = $('<div class="hub-btns"></div>');
         function btn(t, fn) {
-            var b = $('<div class="simple-button selector" style="margin:.3em .6em .3em 0">' + esc(t) + '</div>');
+            var b = $('<div class="simple-button selector" style="margin:.3em .6em .3em 0"></div>').text(t);
             b.on('hover:enter', fn); btns.append(b);
         }
-        function close(cb) { Lampa.Modal.close(); setTimeout(function () { cb && cb(); }, 30); }
-        if (!inst) btn('Установить', function () { install(p, function () { close(function () { showDetail(p, back); }); }); });
+        /* закрыть диалог сразу и обновить карточку на месте: без перерисовки страницы */
+        function finish() { Lampa.Modal.close(); setTimeout(function () { refreshCards(p.id); back && back(); }, 30); }
+        if (!inst) btn('Установить', function () { install(p, finish); });
         else {
-            btn(inst.status ? 'Выключить' : 'Включить', function () { toggle(p, function () { close(function () { showDetail(p, back); }); }); });
-            btn('Удалить', function () { uninstall(p, function () { close(function () { showDetail(p, back); }); }); });
+            btn(inst.status ? 'Выключить' : 'Включить', function () { toggle(p, finish); });
+            if (inst.local) btn('Удалить', function () { uninstall(p, finish); });
         }
+        if (p.rd) btn('README', function () { Lampa.Modal.close(); setTimeout(function () { showReadme(p, function () { showDetail(p, back); }); }, 30); });
         btn('Копировать адрес', function () { try { Lampa.Utils.copyTextToClipboard(p.url, function () { noty('Адрес скопирован'); }, function () { noty(p.url); }); } catch (e) { noty(p.url); } });
         html.append(btns);
-        Lampa.Modal.open({ title: p.name, html: html, size: 'medium', onBack: function () { close(back); } });
+        if (inst && inst.cub && !inst.local) html.append(el('div', 'hub-rd__note hub-rd__l', 'Установлен через CUB — как и в оригинальном списке, его можно только включать и выключать; удалить — на cub.best.'));
+
+        var st = statFresh(p.url), trusted = isTrusted(p);
+        var src = el('div', 'hub-rd__l'); src.appendChild(fav(p.domain || (p.url.split('/')[2] || ''))); src.appendChild(document.createTextNode(p.domain || p.url));
+        var tr = trusted ? el('div', 'hub-rd__l hub-flag--ok', '✔ Доверенный источник: плагин есть в ' + (p.sources || []).filter(function (x) { return TRUSTED.indexOf(x) >= 0; }).join(', '))
+            : el('div', 'hub-rd__l', 'Не из доверенных источников' + (p.found ? ' — найден автопоиском в GitHub' : ''));
+        [
+            block('Описание', [p.descr && el('div', 'hub-rd__l hub-rd__full', p.descr), p.about && p.about !== p.descr && el('div', 'hub-rd__l hub-rd__full', p.about)]),
+            block('Источник', [src, tr, kv('Адрес', p.url), kv('Зеркала', (p.mirrors || []).join(', ')), kv('Найден в', (p.sources || []).join(', ')),
+                kv('На lampaguide', p.status), kv('Страница', p.page)]),
+            scanBlock(p),
+            githubBlock(p),
+            block('Состояние', [kv('Версия', p.version), kv('Обновлён', p.updated), kv('Автор', p.author), kv('Категория', p.group),
+                kv('Установка', inst ? (inst.status ? 'установлен, включён' : 'установлен, выключен') + ' (' + where + ')' : 'не установлен'),
+                kv('Проверка загрузки', st ? st.code + ' · ' + st.txt : ''), kv('Размер', pr.size ? Math.round(pr.size / 1024) + ' КБ' : ''),
+                kv('Другие названия', (p.alt_names || []).join(', ')), kv('Проверен в сборке', pr.checked)]),
+            hist.length ? block('История', hist.map(function (h) { return h.date + ' — ' + (TYPE_TXT[h.type] || h.type) + (h.version ? ' (v' + h.version + ')' : '') + (h.extra && h.extra.from ? ' ' + h.extra.from + ' → ' + h.extra.to : ''); })) : null
+        ].forEach(function (b) { if (b) html.append(b); });
+        Lampa.Modal.open({ title: p.name, html: html, size: 'medium', onBack: function () { Lampa.Modal.close(); setTimeout(function () { back && back(); }, 30); } });
     }
 
     function showSources(back) {
@@ -795,6 +985,9 @@
             var state = r ? (r.ok ? '✓ ' + r.count + ' шт., ' + new Date(r.ts).toISOString().slice(0, 10) : '✗ ' + r.err) : (seedS ? 'из сборки: ' + seedS.count + ' шт. (' + (SEED.generated || '') + ')' : 'ещё не обновлялся');
             return { title: st.name, subtitle: state + '\n' + st.url };
         });
+        var gh = buildCatalog(), ghn = gh.filter(function (p) { return (p.sources || []).indexOf('github') >= 0; }).length, grn = gh.filter(function (p) { return p.repo; }).length;
+        items.push({ title: 'github', subtitle: 'автопоиск ' + (s.github ? 'вкл' : 'выкл') + ': найдено ' + ghn + ' шт.; исходник на GitHub известен у ' + grn + ' из ' + gh.length +
+            (c.sources.github ? '; ' + new Date(c.sources.github.ts).toISOString().slice(0, 10) : '') + '\nhttps://github.com/search?q=lampa+plugin&type=code' });
         Lampa.Select.show({ title: 'Источники', items: items, onBack: back, onSelect: function () { back(); } });
     }
 

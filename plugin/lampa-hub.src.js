@@ -283,8 +283,36 @@
         });
         return (instMemo = m);
     }
+    /* что изменилось с момента запуска Lampa: плагины подключаются при старте, так что убранный плагин
+       исчезает, а добавленный (не всегда) заработает полностью только после перезагрузки */
+    var base = {};
+    function touch(id) { if (!(id in base)) { var v = installedMap()[id]; base[id] = !!(v && v.status); } }
+    function pending() {
+        var inst = installedMap(), add = 0, rem = 0;
+        Object.keys(base).forEach(function (id) {
+            var now = !!(inst[id] && inst[id].status);
+            if (now && !base[id]) add++;
+            else if (!now && base[id]) rem++;
+        });
+        return { add: add, rem: rem };
+    }
+    function reloadSub() {
+        var c = pending(), t = [];
+        if (c.add) t.push('+' + c.add + ' установлено');
+        if (c.rem) t.push('\u2212' + c.rem + ' убрано');
+        return t.length ? t.join(', ') + ' — применить' : 'изменений нет';
+    }
+    var reloadNode = null;
+    function syncReload() {
+        if (!reloadNode) return;
+        var c = pending();
+        reloadNode.childNodes[1].textContent = reloadSub();
+        reloadNode.className = reloadNode.className.replace(' hub-act--pending', '') + (c.add || c.rem ? ' hub-act--pending' : '');
+    }
+
     function install(p, done) {
         if (installedMap()[p.id]) { noty('Уже установлен'); return done && done(); }
+        touch(p.id);
         Lampa.Plugins.add({ url: p.url, status: 1, name: p.name, author: p.author || '@hub' });
         dirty();
         logEvent('installed', p);
@@ -295,6 +323,7 @@
         var v = installedMap()[p.id];
         if (!v) return done && done();
         if (!v.local) { noty('Установлен через CUB — удалить можно только на cub.best, здесь его можно лишь выключить'); return done && done(); }
+        touch(p.id);
         Lampa.Plugins.remove(v.local);
         if (v.cub && v.cub.status) {
             v.cub.status = 0;
@@ -310,6 +339,7 @@
         var v = installedMap()[p.id];
         if (!v) return done && done();
         var st = v.status ? 0 : 1;
+        touch(p.id);
         if (v.local) { v.local.status = st; Lampa.Plugins.save(); }
         if (v.cub) {
             v.cub.status = st;
@@ -495,6 +525,8 @@
         '.hub-act{flex-direction:column;text-align:center}' +
         '.hub-act__title{font-size:1.2em;margin-bottom:.4em}' +
         '.hub-act__sub{font-size:.84em;color:#8D8D8D;line-height:1.4}' +
+        '.hub-act--pending .hub-act__sub{color:#fff}' +
+        '.hub-act--pending:not(.focus){background:rgba(76,175,80,.25)}' +
         '.hub-page .extensions__block-title span{color:#8D8D8D;font-size:.8em;margin-left:.6em}';
 
     function injectCss() {
@@ -652,6 +684,7 @@
         c.appendChild(el('div', 'hub-act__title', a.title));
         c.appendChild(el('div', 'hub-act__sub', a.sub || ''));
         c.addEventListener('hover:enter', function () { a.run(); });
+        if (a.id === 'reload') { reloadNode = c; if (a.pending) c.className += ' hub-act--pending'; }
         return c;
     }
 
@@ -733,6 +766,18 @@
     function planRows(state) {
         var s = settings(), c = cache(), inst = installedMap(), nw = newIdsMap();
         var full = buildCatalog(), all = full.filter(function (p) { return !(s.hide_github && p.group === GH_GROUP); });
+        /* установлено через стандартный раздел «Расширения» (или CUB), а в каталоге хаба нет — всё равно показываем */
+        var known = {}, seen = {};
+        full.forEach(function (p) { known[p.id] = 1; (p.mirrors || []).forEach(function (u) { known[keyOf(u)] = 1; }); });
+        Object.keys(inst).forEach(function (k) {
+            var v = inst[k];
+            if (known[k] || seen[v.url]) return;
+            seen[v.url] = 1;
+            var a = (v.local && v.local.author) || (v.cub && v.cub.author) || '';
+            full.push({ id: k, name: v.name || (v.url.split('/').pop() || v.url).replace(/\.js.*$/, ''), url: v.url, author: a === '@hub' ? '' : a,
+                descr: 'Установлен через стандартный раздел «Расширения»; в каталоге хаба его нет.', group: 'Установленные', sources: ['Lampa'],
+                domain: v.url.split('/')[2] || '' });
+        });
         var ctx = { inst: inst, nw: nw, all: full };
         var plug = function (p) { return pluginCard(p, ctx); };
         var when = c.ts ? new Date(c.ts).toISOString().slice(0, 10) : (SEED && SEED.generated) || '—';
@@ -744,12 +789,8 @@
 
         var actions = [
             { title: 'Поиск', sub: state.q ? 'сейчас: «' + state.q + '» — нажмите, чтобы изменить' : 'по названию, описанию, автору', run: function () { page.search(all); } },
-            { title: 'Категории', sub: cats.length + ' категорий — перейти к нужной', run: function () { page.pickCategory(); } },
-            { title: 'Новое и обновлённое', sub: 'свежие по дате', run: function () { page.jump('fresh'); } },
-            { title: 'Установленные', sub: instList.length + ' шт.', run: function () { if (instList.length) page.jump('inst'); else noty('Пока ничего не установлено'); } },
-            { title: 'История', sub: history().length + ' записей: название, версия, дата, описание', run: function () { if (hist.length) page.jump('hist'); else noty('История пока пуста'); } },
+            { id: 'reload', title: 'Перезагрузить', sub: reloadSub(), pending: pending().add + pending().rem > 0, run: function () { window.location.reload(); } },
             { title: 'Обновить каталог', sub: 'магазины + автопоиск в GitHub · обновлён ' + when, run: function () { runRefresh(); } },
-            { title: 'Добавить по адресу', sub: 'установить плагин по ссылке', run: function () { page.addByUrl(); } },
             { title: 'Источники', sub: 'какие магазины доступны', run: function () { showSources(pageToggle); } },
             { title: 'Настройки', sub: 'автопоиск, обновление, свои магазины', run: function () { showSettings(function () { if (page) { page.rebuild(); } }); } }
         ];
@@ -759,7 +800,10 @@
             var res = all.filter(function (p) { return [p.name, p.descr, p.author, p.url, (p.alt_names || []).join(' ')].join(' ').toLowerCase().indexOf(q) >= 0; });
             rows.push({ id: 'search', title: 'Поиск: ' + state.q, count: res.length ? res.length + ' найдено' : 'ничего не найдено', items: res, build: plug });
         }
-        if (instList.length) rows.push({ id: 'inst', title: 'Установленные', count: instList.length, items: instList, build: plug });
+        /* первой карточкой — «Добавить по адресу»; строка есть всегда, даже когда ничего не установлено */
+        rows.push({ id: 'inst', title: 'Установленные', count: instList.length, items: [{ add: true }].concat(instList), build: function (p) {
+            return p.add ? actionCard({ title: 'Добавить по адресу', sub: 'установить плагин по ссылке', run: function () { page.addByUrl(); } }) : plug(p);
+        } });
         if (fresh.length) rows.push({ id: 'fresh', title: 'Новое и обновлённое', count: fresh.length, items: fresh, build: plug });
         if (hist.length) rows.push({ id: 'hist', title: 'История', count: history().length, items: hist, build: function (e) { return historyCard(e, ctx); } });
         if (popular.length) rows.push({ id: 'popular', title: 'Популярные', count: popular.length, items: popular, build: plug });
@@ -824,13 +868,6 @@
                 if (P.state.q) P.jump('search');
             });
         };
-        P.pickCategory = function () {
-            var items = P.rows.filter(function (r) { return r.def.cat; }).map(function (r) { return { title: r.def.title, subtitle: r.def.count + ' шт.', id: r.def.id }; });
-            Lampa.Select.show({
-                title: 'Категории', items: items, onBack: function () { P.toggle(); },
-                onSelect: function (a) { setTimeout(function () { P.toggle(); P.jump(a.id); }, 10); }
-            });
-        };
         P.addByUrl = function () {
             Lampa.Input.edit({ title: 'Адрес плагина (https://…/plugin.js)', value: '', free: true, nosave: true }, function (v) {
                 v = (v || '').trim();
@@ -842,7 +879,7 @@
             P.clear();
             try { P.scroll.destroy(); } catch (e) { /* ignore */ }
             P.html.remove();
-            page = null;
+            page = null; reloadNode = null;
             $('body').removeClass('ambience--enable');
             Lampa.Controller.toggle(prev);
         };
@@ -977,7 +1014,7 @@
             b.on('hover:enter', fn); btns.append(b);
         }
         /* закрыть диалог сразу и обновить карточку на месте: без перерисовки страницы */
-        function finish() { Lampa.Modal.close(); setTimeout(function () { refreshCards(p.id); back && back(); }, 30); }
+        function finish() { Lampa.Modal.close(); setTimeout(function () { refreshCards(p.id); syncReload(); back && back(); }, 30); }
         if (!inst) btn('Установить', function () { install(p, finish); });
         else {
             btn(inst.status ? 'Выключить' : 'Включить', function () { toggle(p, finish); });
@@ -1024,6 +1061,28 @@
                     } catch (e) { /* закрыто */ }
                 });
             }
+        }
+        if (p.rd) {
+            /* внутри README стрелки вверх/вниз сдвигают фокус примерно на полэкрана, а не на одну строку */
+            var halfPage = function (e) {
+                if (!document.body.contains(slot[0])) return document.removeEventListener('keydown', halfPage, true);
+                var dir = e.keyCode === 40 || e.key === 'ArrowDown' ? 1 : e.keyCode === 38 || e.key === 'ArrowUp' ? -1 : 0;
+                if (!dir) return;
+                var lines = slot.find('.hub-md__i.selector').toArray(), cur = -1, i;
+                for (i = 0; i < lines.length; i++) if (lines[i].classList.contains('focus')) cur = i;
+                if (cur < 0) return;
+                var top = lines[cur].getBoundingClientRect().top, step = window.innerHeight / 2, to = -1;
+                if (dir > 0) {
+                    if (cur === lines.length - 1) return;
+                    for (i = cur + 1; i < lines.length; i++) { to = i; if (lines[i].getBoundingClientRect().top - top >= step) break; }
+                } else {
+                    if (cur === 0) return;
+                    for (i = cur - 1; i >= 0; i--) { to = i; if (top - lines[i].getBoundingClientRect().top >= step) break; }
+                }
+                e.preventDefault(); e.stopImmediatePropagation();
+                Lampa.Controller.collectionFocus(lines[to], Lampa.Modal.render()[0]);
+            };
+            document.addEventListener('keydown', halfPage, true);
         }
         Lampa.Modal.open({ title: p.name, html: html, size: p.rd ? 'large' : 'medium', onBack: function () { Lampa.Modal.close(); setTimeout(function () { back && back(); }, 30); } });
     }

@@ -837,20 +837,31 @@
     /* ------------------------------------------------------------------ settings folder + boot */
     var ICON = '<svg viewBox="0 0 44 44" fill="none" xmlns="http://www.w3.org/2000/svg"><rect width="19" height="19" rx="2" fill="white"/><rect x="25" width="19" height="19" rx="2" fill="white"/><rect y="25" width="19" height="19" rx="2" fill="white"/><rect x="25" y="25" width="19" height="19" rx="2" stroke="white" stroke-width="3"/></svg>';
 
-    function addFolder() {
-        if (!Lampa.Settings.main || Lampa.Settings.main().render().find('[data-component="lampa_hub"]').length) return;
-        var field = $('<div class="settings-folder selector" data-component="lampa_hub" data-static="true"><div class="settings-folder__icon">' + ICON +
-            '</div><div class="settings-folder__name">Хаб плагинов</div></div>');
-        Lampa.Settings.main().render().find('[data-component="more"]').after(field);
-        Lampa.Settings.main().update();
+    /* Вставляет папку в главное меню настроек; вызывается на старте и при каждом открытии настроек,
+       поэтому переживает пересборку списка. Место: после «Расширения» (на виду, а не за десятком папок других плагинов),
+       иначе после «Остальное», иначе в конец списка папок. */
+    function addFolder(body) {
+        var main = Lampa.Settings.main && Lampa.Settings.main(), host = body || (main && main.render());
+        if (!host || !host.length) return false;
+        var field = host.find('[data-component="lampa_hub"]');
+        if (!field.length) {
+            field = $('<div class="settings-folder selector" data-component="lampa_hub" data-static="true"><div class="settings-folder__icon">' + ICON +
+                '</div><div class="settings-folder__name">Хаб плагинов</div></div>');
+            var anchor = host.find('[data-component="plugins"]');
+            if (!anchor.length) anchor = host.find('[data-component="more"]');
+            if (!anchor.length) anchor = host.find('.settings-folder').last();
+            if (!anchor.length) return false;
+            anchor.after(field);
+            if (main) main.update();
+        }
+        field.off('hover:enter').on('hover:enter', function () { showMain(); });
+        return true;
     }
 
     function boot() {
-        addFolder();
+        try { addFolder(); } catch (e) { /* the open listener below retries */ }
         Lampa.Settings.listener.follow('open', function (e) {
-            if (e.name === 'main') {
-                e.body.find('[data-component="lampa_hub"]').off('hover:enter').on('hover:enter', function () { showMain(); });
-            }
+            if (e.name === 'main') { try { addFolder(e.body); } catch (x) { /* ignore */ } }
         });
         var s = settings(), c = cache();
         if (s.auto && (!c.ts || Date.now() - c.ts > s.interval * 3600e3)) setTimeout(function () { refresh({}, function () { }); }, 15000);

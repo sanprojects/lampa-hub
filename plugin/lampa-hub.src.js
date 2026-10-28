@@ -421,15 +421,19 @@
         '.hub-card .extensions__item-author{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
         '.hub-card .extensions__item-name{overflow:hidden;text-overflow:ellipsis}' +
         '.hub-card .extensions__item-descr{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:3em;margin-top:.5em;opacity:.8}' +
-        '.hub-card .extensions__item-footer{flex-wrap:wrap;margin-top:auto;padding-top:.6em}' +
-        '.hub-card .extensions__item-stars{color:#ffd666;font-weight:600;font-size:.9em;margin-right:.8em;white-space:nowrap}' +
-        '.hub-card .extensions__item-status{margin-right:.8em;white-space:nowrap}' +
-        '.hub-card .extensions__item-code{margin-right:.6em;white-space:nowrap}' +
-        '.hub-card .extensions__item-price{margin-left:auto}' +
-        '.hub-card .extensions__item-price--bad{background-color:rgba(221,115,55,.22);color:#ff9d6e}' +
-        '.hub-state{display:flex;align-items:center;min-height:1.6em;margin-top:.5em}' +
+        '.hub-card .extensions__item-body{position:relative}' +
+        '.hub-card .extensions__item-author{padding-right:6em}' +
+        '.hub-card .extensions__item-footer{flex-wrap:wrap;margin-top:auto;padding-top:.6em;min-height:2.2em;align-items:center}' +
+        '.hub-card .hub-meta{font-size:.78em;color:#8D8D8D;margin-top:.5em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
+        '.hub-card .hub-meta b{color:#ffd666;font-weight:600;margin-right:.7em}' +
+        '.hub-card .hub-url{font-size:.78em;color:#8D8D8D;opacity:.75;margin-top:.3em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
+        '.hub-badge{position:absolute;top:0;right:0;background-color:rgba(0,0,0,.18);border-radius:.3em;padding:.3em .4em .4em;font-size:.78em}' +
+        '.hub-badge--free{color:#6DCE4B}.hub-badge--shareware{color:#ffd016}.hub-badge--paid{color:#8D8D8D}.hub-badge--bad{color:#ff9d6e}' +
+        '.hub-card .extensions__item-footer .extensions__item-included{position:static;width:1.2em;height:1.2em;padding-top:.24em;margin:0 .5em 0 0;flex-shrink:0;background-color:rgba(0,0,0,.18)}' +
+        '.hub-card .extensions__item-proto{margin-right:.5em;flex-shrink:0;line-height:0}' +
+        '.hub-state{display:flex;align-items:center;min-width:0}' +
         '.hub-state .extensions__item-check,.hub-state .extensions__item-error{margin-right:.5em;flex-shrink:0}' +
-        '.hub-state .extensions__item-code{margin-right:.5em;font-size:.78em}' +
+        '.hub-state .extensions__item-code{margin-right:.5em;font-size:.78em;white-space:nowrap}' +
         '.hub-state .extensions__item-status{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
         '.hub-act{flex-direction:column;text-align:center}' +
         '.hub-act__title{font-size:1.2em;margin-bottom:.4em}' +
@@ -456,6 +460,9 @@
     function hueOf(s) { var h = 0; s = s || ''; for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return Math.abs(h) % 360; }
     function authorOf(p) { var a = p.author; if (a) return a.charAt(0) === '@' ? a : '@' + a; return p.sources && p.sources[0] ? p.sources[0] : ''; }
     function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+
+    var LOCK_SVG = '<svg width="21" height="30" viewBox="0 0 21 30" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="10.5" cy="8.5" r="7" stroke="currentColor" stroke-width="3"/><rect y="9" width="21" height="21" rx="4" fill="currentColor"/></svg>';
+    function shortUrl(u) { u = (u + '').replace(/^[a-z]+:\/\//i, '').replace(/^www\./i, '').replace(/[?#].*$/, ''); return u.length > 44 ? u.slice(0, 43) + '…' : u; }
 
     /* status line of a card: loader -> "200 Рабочий" / "500 Плагин не подтверждён" / "404 Ошибка"; red "!" = Lampa failed to load it */
     function stateLine(card, o) {
@@ -500,17 +507,23 @@
             shot.src = o.img;
             box.appendChild(shot);
         }
-        if (o.check) box.appendChild(el('div', 'extensions__item-included'));
         var body = el('div', 'extensions__item-body');
+        if (o.badge) body.appendChild(el('div', 'hub-badge hub-badge--' + o.badge[1], o.badge[0]));
         body.appendChild(el('div', 'extensions__item-author', o.author || ''));
         body.appendChild(el('div', 'extensions__item-name', o.name));
         if (o.descr) body.appendChild(el('div', 'extensions__item-descr', clip(o.descr, 150)));
-        if (o.statusUrl) body.appendChild(stateLine(c, o));
+        var meta = el('div', 'hub-meta');
+        if (o.stars) meta.appendChild(el('b', '', '★ ' + o.stars));
+        meta.appendChild(document.createTextNode([o.version ? 'v' + o.version : '', o.date || ''].filter(Boolean).join(' · ')));
+        if (meta.textContent) body.appendChild(meta);
+        if (o.statusUrl) body.appendChild(el('div', 'hub-url', shortUrl(o.statusUrl)));
         var foot = el('div', 'extensions__item-footer');
-        if (o.stars) foot.appendChild(el('div', 'extensions__item-stars', '★ ' + o.stars));
-        if (o.version) foot.appendChild(el('div', 'extensions__item-code', 'v' + o.version));
-        if (o.date) foot.appendChild(el('div', 'extensions__item-status', o.date));
-        if (o.badge) foot.appendChild(el('div', 'extensions__item-price extensions__item-price--' + o.badge[1], o.badge[0]));
+        if (o.check) foot.appendChild(el('div', 'extensions__item-included'));
+        if (o.statusUrl) {
+            var lock = el('div', 'extensions__item-proto protocol-' + (/^https:/i.test(o.statusUrl) ? 'https' : 'http'));
+            lock.innerHTML = LOCK_SVG; foot.appendChild(lock);
+            foot.appendChild(stateLine(c, o));
+        }
         body.appendChild(foot);
         c.appendChild(box); c.appendChild(body);
         return c;

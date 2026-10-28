@@ -98,6 +98,37 @@
         http(url, opt, function (t, h) { var j; try { j = JSON.parse(t); } catch (e) { return fail({ parse: true }); } ok(j, h); }, fail);
     }
 
+    /* live "does the plugin work" check, same idea as Lampa's own extensions page:
+       download the script, a body mentioning "Lampa." = works (200), otherwise 500; a failed request = its status / 404 */
+    var K_STAT = 'lampa_hub_status', STAT_TTL = 3 * 36e5, statMem = null, statJobs = [], statBusy = 0;
+    function statAll() { if (!statMem) { statMem = ls(K_STAT, {}); if (typeof statMem !== 'object' || !statMem) statMem = {}; } return statMem; }
+    function statFresh(url) { var r = statAll()[url]; return r && Date.now() - r.t < STAT_TTL ? r : null; }
+    function statPump() {
+        while (statBusy < 4 && statJobs.length) {
+            statBusy++;
+            (function (j) {
+                function fin(r) {
+                    r.t = Date.now(); statAll()[j.url] = r;
+                    try { lset(K_STAT, statAll()); } catch (e) { /* ignore */ }
+                    statBusy--; j.cb(r); statPump();
+                }
+                http(j.url, { timeout: 5000 }, function (body) {
+                    fin(/Lampa\./.test(body) ? { code: 200, ok: 1, txt: 'Рабочий' } : { code: 500, ok: 0, txt: 'Плагин не подтверждён' });
+                }, function (e) {
+                    var st = e && e.status;
+                    if (!st && j.probe && j.probe.http === 200 && j.probe.lampa) fin({ code: 200, ok: 2, txt: 'Рабочий · по сборке' });
+                    else fin({ code: st || 404, ok: 0, txt: 'Ошибка' });
+                });
+            })(statJobs.shift());
+        }
+    }
+    function statCheck(url, probe, cb) {
+        var r = statFresh(url);
+        if (r) return cb(r, true);
+        statJobs.push({ url: url, probe: probe, cb: cb }); statPump();
+    }
+    function loadFailed(url) { try { return (Lampa.Plugins.errors() || []).indexOf(url) >= 0; } catch (e) { return false; } }
+
     /* ------------------------------------------------------------------ source parsers */
     var GROUPS = { 'онлайн видео': 'Онлайн', 'онлайн': 'Онлайн', 'телевидение': 'ТВ', 'управление': 'Управление', 'разное': 'Разное',
         'мои': 'Разное', 'сообщество': 'Разное', 'интерфейс': 'Интерфейс', 'торренты': 'Торренты', 'тв': 'ТВ', 'радио': 'Радио',
@@ -396,6 +427,10 @@
         '.hub-card .extensions__item-code{margin-right:.6em;white-space:nowrap}' +
         '.hub-card .extensions__item-price{margin-left:auto}' +
         '.hub-card .extensions__item-price--bad{background-color:rgba(221,115,55,.22);color:#ff9d6e}' +
+        '.hub-state{display:flex;align-items:center;min-height:1.6em;margin-top:.5em}' +
+        '.hub-state .extensions__item-check,.hub-state .extensions__item-error{margin-right:.5em;flex-shrink:0}' +
+        '.hub-state .extensions__item-code{margin-right:.5em;font-size:.78em}' +
+        '.hub-state .extensions__item-status{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
         '.hub-act{flex-direction:column;text-align:center}' +
         '.hub-act__title{font-size:1.2em;margin-bottom:.4em}' +
         '.hub-act__sub{font-size:.84em;color:#8D8D8D;line-height:1.4}' +
@@ -421,6 +456,27 @@
     function hueOf(s) { var h = 0; s = s || ''; for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return Math.abs(h) % 360; }
     function authorOf(p) { var a = p.author; if (a) return a.charAt(0) === '@' ? a : '@' + a; return p.sources && p.sources[0] ? p.sources[0] : ''; }
     function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+
+    /* status line of a card: loader -> "200 Рабочий" / "500 Плагин не подтверждён" / "404 Ошибка"; red "!" = Lampa failed to load it */
+    function stateLine(card, o) {
+        var line = el('div', 'hub-state'), started = false;
+        function show(r) {
+            line.innerHTML = '';
+            if (loadFailed(o.statusUrl)) { var bad = el('div', 'extensions__item-error'); bad.title = 'Lampa не смогла загрузить плагин'; line.appendChild(bad); }
+            line.appendChild(el('div', 'extensions__item-code ' + (r.ok === 1 ? 'success' : r.ok === 2 ? 'yellow' : 'error'), r.code));
+            line.appendChild(el('div', 'extensions__item-status', r.txt));
+        }
+        function start() {
+            if (started) return; started = true;
+            var hit = statFresh(o.statusUrl);
+            if (hit) return show(hit);
+            line.appendChild(el('div', 'extensions__item-check'));
+            statCheck(o.statusUrl, o.probe, show);
+        }
+        card.addEventListener('visible', start);
+        card.addEventListener('hover:focus', start);
+        return line;
+    }
 
     /* card skeleton shared by plugin / history cards */
     function baseCard(o) {
@@ -449,6 +505,7 @@
         body.appendChild(el('div', 'extensions__item-author', o.author || ''));
         body.appendChild(el('div', 'extensions__item-name', o.name));
         if (o.descr) body.appendChild(el('div', 'extensions__item-descr', clip(o.descr, 150)));
+        if (o.statusUrl) body.appendChild(stateLine(c, o));
         var foot = el('div', 'extensions__item-footer');
         if (o.stars) foot.appendChild(el('div', 'extensions__item-stars', '★ ' + o.stars));
         if (o.version) foot.appendChild(el('div', 'extensions__item-code', 'v' + o.version));
@@ -465,7 +522,7 @@
         else if (ctx.nw[p.id]) badge = ['Новое', 'shareware'];
         else if (p.found) badge = ['GitHub', 'paid'];
         var c = baseCard({ name: p.name, seed: p.id, author: authorOf(p), descr: p.descr, stars: p.stars, version: p.version, date: p.updated,
-            avatar: ownerOf(p), img: p.img, check: i && i.status, badge: badge });
+            avatar: ownerOf(p), img: p.img, check: i && i.status, badge: badge, statusUrl: p.url, probe: p.probe });
         c.addEventListener('hover:enter', function () { showDetail(p, ctx.after); });
         return c;
     }
@@ -691,7 +748,7 @@
         var html = $('<div class="about"></div>');
         var body = infoRow('Версия', p.version) + infoRow('Обновлён', p.updated) + infoRow('Автор', p.author) + infoRow('Категория', p.group) +
             infoRow('Статус', inst ? (inst.status ? 'установлен, включён' : 'установлен, выключен') : 'не установлен') +
-            infoRow('Описание', p.descr) + infoRow('Адрес', p.url) + infoRow('Зеркала', (p.mirrors || []).join(', ')) +
+            infoRow('Описание', p.descr) + infoRow('Адрес', p.url) + infoRow('Проверка', (function (r) { return r ? r.code + ' · ' + r.txt : ''; })(statFresh(p.url))) + infoRow('Зеркала', (p.mirrors || []).join(', ')) +
             infoRow('Другие названия', (p.alt_names || []).join(', ')) + infoRow('Найден в', (p.sources || []).join(', ')) +
             infoRow('На lampaguide', p.status) + infoRow('Страница', p.page) +
             infoRow('GitHub', p.repo ? p.repo + (p.stars ? ' ★' + p.stars : '') : '') + infoRow('Репозиторий', p.homepage) + infoRow('Темы', (p.topics || []).join(', ')) +

@@ -994,7 +994,6 @@
         }
         [
             block('Описание', [p.descr && el('div', 'hub-rd__l hub-rd__full', p.descr), p.about && p.about !== p.descr && el('div', 'hub-rd__l hub-rd__full', p.about)]),
-            p.rd ? slot[0] : null,
             block('Источник', [src, tr, kv('Адрес', p.url), kv('Зеркала', (p.mirrors || []).join(', ')), kv('Найден в', (p.sources || []).join(', ')),
                 kv('На lampaguide', p.status), kv('Страница', p.page)]),
             scanBlock(p),
@@ -1005,6 +1004,7 @@
                 kv('Другие названия', (p.alt_names || []).join(', ')), kv('Проверен в сборке', pr.checked)]),
             hist.length ? block('История', hist.map(function (h) { return h.date + ' — ' + (TYPE_TXT[h.type] || h.type) + (h.version ? ' (v' + h.version + ')' : '') + (h.extra && h.extra.from ? ' ' + h.extra.from + ' → ' + h.extra.to : ''); })) : null
         ].forEach(function (b) { if (b) html.append(b); });
+        if (p.rd) html.append(slot);  /* README длинный — в самом конце */
         if (p.rd) {
             if (RD_CACHE[p.rd] != null) fill(RD_CACHE[p.rd]);
             else {

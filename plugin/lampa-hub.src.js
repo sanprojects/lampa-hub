@@ -913,28 +913,22 @@
         if (code && code.length) out.push(['code', code.join('\n')]);
         return out;
     }
-    function showReadme(p, back) {
-        function open(content) {
-            Lampa.Modal.open({ title: 'README · ' + p.name, html: content, size: 'large', onBack: function () { Lampa.Modal.close(); setTimeout(function () { back && back(); }, 30); } });
-        }
-        var wait = $('<div></div>'); wait.append(block('', ['Загружаю README…']));
-        open(wait);
-        http('https://cdn.jsdelivr.net/gh/' + p.rd, { timeout: 12000 }, function (txt) {
-            var wrap = $('<div></div>'), n = 0, size = 0;
-            mdBlocks(txt).forEach(function (b) {
-                if (n > 70 || size > 9000) return;
-                var d = el('div', 'hub-rd selector hub-rd--' + b[0]);
-                var t = b[1].length > 700 ? b[1].slice(0, 699) + '…' : b[1];
-                d.textContent = t; size += t.length; n++;
-                wrap.append(d);
-            });
-            if (!n) wrap.append(block('', ['README пустой или не содержит текста.']));
-            else wrap.append(block('', [el('div', 'hub-rd__l hub-rd__note', 'Показан только текст README (без картинок и ссылок). Полный — ' + (p.homepage || p.repo) + '.')]));
-            try { Lampa.Modal.update(wrap); } catch (e) { /* closed meanwhile */ }
-        }, function () {
-            var w = $('<div></div>'); w.append(block('', ['Не удалось загрузить README (' + p.rd + ').']));
-            try { Lampa.Modal.update(w); } catch (e) { /* closed meanwhile */ }
+    /* README прямо в окне плагина: текст грузится асинхронно (jsDelivr), кладётся блоками-«селекторами» и кешируется на сессию */
+    var RD_CACHE = {};
+    function readmeNodes(txt, p) {
+        var out = [], size = 0;
+        mdBlocks(txt).forEach(function (b) {
+            if (out.length > 70 || size > 9000) return;
+            var t = b[1].length > 700 ? b[1].slice(0, 699) + '…' : b[1];
+            out.push(el('div', 'hub-rd selector hub-rd--' + b[0], t)); size += t.length;
         });
+        if (!out.length) out.push(block('README', ['README пустой или не содержит текста.']));
+        else out.push(block('', [el('div', 'hub-rd__l hub-rd__note', 'Показан только текст README (без картинок и ссылок). Полный — ' + (p.homepage || p.repo) + '.')]));
+        return out;
+    }
+    function loadReadme(p, done) {
+        if (RD_CACHE[p.rd] != null) return done(RD_CACHE[p.rd]);
+        http('https://cdn.jsdelivr.net/gh/' + p.rd, { timeout: 12000 }, function (txt) { RD_CACHE[p.rd] = txt; done(txt); }, function () { done(null); });
     }
 
     function showDetail(p, back) {
@@ -954,7 +948,6 @@
             btn(inst.status ? 'Выключить' : 'Включить', function () { toggle(p, finish); });
             if (inst.local) btn('Удалить', function () { uninstall(p, finish); });
         }
-        if (p.rd) btn('README', function () { Lampa.Modal.close(); setTimeout(function () { showReadme(p, function () { showDetail(p, back); }); }, 30); });
         btn('Копировать адрес', function () { try { Lampa.Utils.copyTextToClipboard(p.url, function () { noty('Адрес скопирован'); }, function () { noty(p.url); }); } catch (e) { noty(p.url); } });
         html.append(btns);
         if (inst && inst.cub && !inst.local) html.append(el('div', 'hub-rd__note hub-rd__l', 'Установлен через CUB — как и в оригинальном списке, его можно только включать и выключать; удалить — на cub.best.'));
@@ -963,8 +956,15 @@
         var src = el('div', 'hub-rd__l'); src.appendChild(fav(p.domain || (p.url.split('/')[2] || ''))); src.appendChild(document.createTextNode(p.domain || p.url));
         var tr = trusted ? el('div', 'hub-rd__l hub-flag--ok', '✔ Доверенный источник: плагин есть в ' + (p.sources || []).filter(function (x) { return TRUSTED.indexOf(x) >= 0; }).join(', '))
             : el('div', 'hub-rd__l', 'Не из доверенных источников' + (p.found ? ' — найден автопоиском в GitHub' : ''));
+        var slot = $('<div class="hub-rdslot"></div>');
+        function fill(txt) {
+            slot.empty();
+            if (txt == null) slot.append(block('README', ['Не удалось загрузить README (' + p.rd + ').']));
+            else readmeNodes(txt, p).forEach(function (n) { slot.append(n); });
+        }
         [
             block('Описание', [p.descr && el('div', 'hub-rd__l hub-rd__full', p.descr), p.about && p.about !== p.descr && el('div', 'hub-rd__l hub-rd__full', p.about)]),
+            p.rd ? slot[0] : null,
             block('Источник', [src, tr, kv('Адрес', p.url), kv('Зеркала', (p.mirrors || []).join(', ')), kv('Найден в', (p.sources || []).join(', ')),
                 kv('На lampaguide', p.status), kv('Страница', p.page)]),
             scanBlock(p),
@@ -975,7 +975,22 @@
                 kv('Другие названия', (p.alt_names || []).join(', ')), kv('Проверен в сборке', pr.checked)]),
             hist.length ? block('История', hist.map(function (h) { return h.date + ' — ' + (TYPE_TXT[h.type] || h.type) + (h.version ? ' (v' + h.version + ')' : '') + (h.extra && h.extra.from ? ' ' + h.extra.from + ' → ' + h.extra.to : ''); })) : null
         ].forEach(function (b) { if (b) html.append(b); });
-        Lampa.Modal.open({ title: p.name, html: html, size: 'medium', onBack: function () { Lampa.Modal.close(); setTimeout(function () { back && back(); }, 30); } });
+        if (p.rd) {
+            if (RD_CACHE[p.rd] != null) fill(RD_CACHE[p.rd]);
+            else {
+                slot.append(block('README', ['Загружаю README…']));
+                loadReadme(p, function (txt) {
+                    fill(txt);
+                    /* кнопки остаются на месте (Modal.update пересоздал бы содержимое и потерял бы их обработчики): подключаем только новые блоки */
+                    try {
+                        if (!document.body.contains(slot[0])) return;
+                        slot.find('.selector').on('hover:focus', function (e) { Lampa.Modal.scroll().update($(e.target)); });
+                        Lampa.Modal.toggle(true);
+                    } catch (e) { /* закрыто */ }
+                });
+            }
+        }
+        Lampa.Modal.open({ title: p.name, html: html, size: p.rd ? 'large' : 'medium', onBack: function () { Lampa.Modal.close(); setTimeout(function () { back && back(); }, 30); } });
     }
 
     function showSources(back) {

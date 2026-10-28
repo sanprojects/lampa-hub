@@ -469,8 +469,15 @@
         '.hub-rd.focus{background-color:rgba(255,255,255,.14)}' +
         '.hub-rd__t{font-weight:600;margin-bottom:.4em}.hub-rd__l{margin:.15em 0;word-break:break-word}.hub-rd__k{color:#8D8D8D}' +
         '.hub-rd__note{font-size:.85em;color:#8D8D8D}' +
-        '.hub-rd--h{font-weight:600;font-size:1.1em}.hub-rd--li{padding-top:.3em;padding-bottom:.3em}' +
-        '.hub-rd--code{font-family:monospace;font-size:.85em;white-space:pre-wrap;word-break:break-all}' +
+        '.hub-md .hub-md__i{margin:.45em 0;word-break:break-word}' +
+        '.hub-md .hub-md__i.focus,.hub-md .hub-md__i.hover{background:none;box-shadow:none;outline:none}' +
+        '.hub-md__h1{font-size:1.5em;font-weight:700;margin-top:.9em!important}.hub-md__h2{font-size:1.25em;font-weight:700;margin-top:.8em!important}.hub-md__h3{font-size:1.08em;font-weight:600;margin-top:.7em!important}' +
+        '.hub-md__li{margin-top:.2em!important;margin-bottom:.2em!important}.hub-md__n{color:#8D8D8D}' +
+        '.hub-md__q{border-left:.2em solid rgba(255,255,255,.25);padding-left:.8em;opacity:.8}' +
+        '.hub-md__row{font-size:.9em;opacity:.9}' +
+        '.hub-md__code{font-family:monospace;font-size:.85em;white-space:pre-wrap;word-break:break-all;background:rgba(0,0,0,.3);border-radius:.3em;padding:.6em .8em}' +
+        '.hub-md code{font-family:monospace;font-size:.9em;background:rgba(0,0,0,.3);border-radius:.25em;padding:.05em .35em}' +
+        '.hub-md__a{text-decoration:underline;opacity:.9}' +
         '.hub-btns{display:flex;flex-wrap:wrap;margin-bottom:.6em}' +
         '.hub-badge{position:absolute;top:0;right:0;background-color:rgba(0,0,0,.18);border-radius:.3em;padding:.3em .4em .4em;font-size:.78em}' +
         '.hub-badge--free{color:#6DCE4B}.hub-badge--shareware{color:#ffd016}.hub-badge--paid{color:#8D8D8D}.hub-badge--bad{color:#ff9d6e}' +
@@ -891,40 +898,63 @@
             kv('Репозиторий создан', ageOf(p.created)), kv('Последний коммит', p.pushed), kv('Темы', (p.topics || []).join(', ')), kv('Ссылка', p.homepage)]);
     }
 
-    /* README: простой разбор Markdown в DOM только через textContent — без HTML, ссылок, картинок и скриптов */
+    /* README: разбор Markdown в DOM только через createElement/textContent — без HTML, ссылок, картинок и скриптов */
+    function mdInline(t) {
+        var f = document.createDocumentFragment(), re = /(\*\*[^*]+\*\*|__[^_]+__|`[^`]+`|\*[^*\s][^*]*\*|\[[^\]]+\]\([^)]*\)|<[^>]+>)/g, last = 0, m;
+        t = t.replace(/!\[[^\]]*\]\([^)]*\)/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+        while ((m = re.exec(t))) {
+            if (m.index > last) f.appendChild(document.createTextNode(t.slice(last, m.index)));
+            var x = m[0];
+            if (x.charAt(0) === '<') { /* HTML-теги выкидываем */ }
+            else if (x.charAt(0) === '`') f.appendChild(el('code', '', x.slice(1, -1)));
+            else if (x.charAt(0) === '[') f.appendChild(el('span', 'hub-md__a', x.slice(1, x.indexOf(']('))));
+            else if (x.slice(0, 2) === '**' || x.slice(0, 2) === '__') f.appendChild(el('strong', '', x.slice(2, -2)));
+            else f.appendChild(el('em', '', x.slice(1, -1)));
+            last = m.index + x.length;
+        }
+        if (last < t.length) f.appendChild(document.createTextNode(t.slice(last)));
+        return f;
+    }
     function mdBlocks(md) {
         md = (md + '').replace(/\r/g, '').replace(/<!--[\s\S]*?-->/g, '').replace(/<(script|style)[\s\S]*?<\/\1>/gi, '');
         var out = [], para = [], code = null;
-        function inline(t) {
-            return t.replace(/!\[[^\]]*\]\([^)]*\)/g, '').replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').replace(/<[^>]+>/g, '').replace(/[*_`~]{1,3}/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
-        }
-        function flush() { if (para.length) { var t = inline(para.join(' ')); if (t) out.push(['p', t]); para = []; } }
+        function flush() { if (para.length) { var t = para.join(' ').trim(); if (t) out.push({ k: 'p', t: t }); para = []; } }
         md.split('\n').forEach(function (ln) {
-            if (/^\s*(```|~~~)/.test(ln)) { if (code) { out.push(['code', code.join('\n')]); code = null; } else { flush(); code = []; } return; }
+            if (/^\s*(```|~~~)/.test(ln)) { if (code) { out.push({ k: 'code', t: code.join('\n') }); code = null; } else { flush(); code = []; } return; }
             if (code) { code.push(ln); return; }
-            var h = ln.match(/^\s{0,3}(#{1,6})\s+(.*)$/);
-            if (h) { flush(); var t = inline(h[2]); if (t) out.push(['h', t]); return; }
-            var li = ln.match(/^\s*(?:[-*+]|\d+[.)])\s+(.*)$/);
-            if (li) { flush(); var l = inline(li[1]); if (l) out.push(['li', '• ' + l]); return; }
-            if (!ln.trim() || /^\s*(?:[-*_]\s*){3,}$/.test(ln) || /^\s*\|?[\s:-]+\|[\s|:-]*$/.test(ln)) { flush(); return; }
-            para.push(ln.replace(/^\s*>\s?/, ''));
+            var h = ln.match(/^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/);
+            if (h) { flush(); if (h[2].trim()) out.push({ k: 'h', l: Math.min(h[1].length, 3), t: h[2].trim() }); return; }
+            var li = ln.match(/^(\s*)([-*+]|\d+[.)])\s+(.*)$/);
+            if (li) { flush(); out.push({ k: 'li', d: Math.min(Math.floor(li[1].replace(/\t/g, '    ').length / 2), 3), n: /\d/.test(li[2]) ? li[2] : '•', t: li[3] }); return; }
+            if (/^\s*>/.test(ln)) { flush(); out.push({ k: 'q', t: ln.replace(/^\s*>\s?/, '') }); return; }
+            if (/^\s*\|?[\s:-]+\|[\s|:-]*$/.test(ln)) return;
+            if (/^\s*\|.*\|\s*$/.test(ln)) { flush(); out.push({ k: 'row', t: ln.replace(/^\s*\||\|\s*$/g, '').split('|').map(function (c) { return c.trim(); }).join('  ·  ') }); return; }
+            if (!ln.trim() || /^\s*(?:[-*_]\s*){3,}$/.test(ln)) { flush(); return; }
+            para.push(ln.trim());
         });
         flush();
-        if (code && code.length) out.push(['code', code.join('\n')]);
+        if (code && code.length) out.push({ k: 'code', t: code.join('\n') });
         return out;
     }
+
     /* README прямо в окне плагина: текст грузится асинхронно (jsDelivr), кладётся блоками-«селекторами» и кешируется на сессию */
     var RD_CACHE = {};
     function readmeNodes(txt, p) {
-        var out = [], size = 0;
+        var box = el('div', 'hub-rd hub-md'), n = 0, size = 0;
+        box.appendChild(el('div', 'hub-rd__t', 'README'));
         mdBlocks(txt).forEach(function (b) {
-            if (out.length > 70 || size > 9000) return;
-            var t = b[1].length > 700 ? b[1].slice(0, 699) + '…' : b[1];
-            out.push(el('div', 'hub-rd selector hub-rd--' + b[0], t)); size += t.length;
+            if (n > 250 || size > 24000) return;
+            var t = b.t.length > 1500 ? b.t.slice(0, 1499) + '…' : b.t, d;
+            if (b.k === 'h') d = el('div', 'hub-md__i hub-md__h' + b.l);
+            else if (b.k === 'li') { d = el('div', 'hub-md__i hub-md__li'); d.style.marginLeft = (b.d * 1.2) + 'em'; d.appendChild(el('span', 'hub-md__n', b.n + ' ')); }
+            else d = el('div', 'hub-md__i hub-md__' + b.k);
+            if (b.k === 'code') d.textContent = t; else d.appendChild(mdInline(t));
+            d.className += ' selector';
+            box.appendChild(d); n++; size += t.length;
         });
-        if (!out.length) out.push(block('README', ['README пустой или не содержит текста.']));
-        else out.push(block('', [el('div', 'hub-rd__l hub-rd__note', 'Показан только текст README (без картинок и ссылок). Полный — ' + (p.homepage || p.repo) + '.')]));
-        return out;
+        if (!n) box.appendChild(el('div', 'hub-rd__l', 'README пустой или не содержит текста.'));
+        else box.appendChild(el('div', 'hub-rd__l hub-rd__note', 'Показан текст README (без картинок и ссылок). Полный — ' + (p.homepage || p.repo) + '.'));
+        return [box];
     }
     function loadReadme(p, done) {
         if (RD_CACHE[p.rd] != null) return done(RD_CACHE[p.rd]);
